@@ -1,0 +1,11 @@
+# USD binary and text files — not vendored in git.
+# Obtain via assets/usd/download_so101_urdf.sh + convert_urdf.
+*.usd
+*.usda
+*.usdc
+*.usdz
+
+# Mesh files fetched by download script (also not vendored)
+*.stl
+*.obj
+*.dae
