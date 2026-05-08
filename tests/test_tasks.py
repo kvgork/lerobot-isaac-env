@@ -22,11 +22,13 @@ def _isaaclab_fully_installed() -> bool:
     """
     try:
         from isaaclab.envs import ManagerBasedRLEnv  # type: ignore[import]  # noqa: F401
+
         return True
     except (ImportError, ModuleNotFoundError):
         pass
     try:
         from omni.isaac.lab.envs import ManagerBasedRLEnv  # type: ignore[import]  # noqa: F401
+
         return True
     except (ImportError, ModuleNotFoundError):
         return False
@@ -87,7 +89,9 @@ def test_insertion_env_cfg_raises_not_implemented():
     with pytest.raises(NotImplementedError) as exc_info:
         InsertionEnvCfg()
 
-    assert "Stage 5" in str(exc_info.value) or "insertion" in str(exc_info.value).lower()
+    assert (
+        "Stage 5" in str(exc_info.value) or "insertion" in str(exc_info.value).lower()
+    )
 
 
 # ---------------------------------------------------------------------------

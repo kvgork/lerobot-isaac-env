@@ -27,7 +27,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 # ---------------------------------------------------------------------------
 # Soft Isaac Lab imports — allow package import without Isaac Lab
@@ -95,7 +95,6 @@ if TYPE_CHECKING:
         EventTermCfg,
         RewardTermCfg,
         TerminationTermCfg,
-        SceneEntityCfg,
     )
     import isaaclab.envs.mdp as mdp  # type: ignore[import]
 
@@ -415,9 +414,7 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
     """SO101SceneCfg with robot, ground, light.  Populated in __post_init__."""
 
     # --- MDP manager sub-configs (backward-compat placeholder types) ---
-    observations: SO101ObservationsCfg = field(
-        default_factory=SO101ObservationsCfg
-    )
+    observations: SO101ObservationsCfg = field(default_factory=SO101ObservationsCfg)
     """Observation group config.  Column names match LeRobotDataset v3.0."""
 
     actions: SO101ActionsCfg = field(default_factory=SO101ActionsCfg)
@@ -426,9 +423,7 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
     rewards: SO101RewardsCfg = field(default_factory=SO101RewardsCfg)
     """Reward term config (sparse success + optional dense shaping)."""
 
-    terminations: SO101TerminationsCfg = field(
-        default_factory=SO101TerminationsCfg
-    )
+    terminations: SO101TerminationsCfg = field(default_factory=SO101TerminationsCfg)
     """Termination conditions (success + timeout)."""
 
     events: SO101EventsCfg = field(default_factory=SO101EventsCfg)

@@ -28,7 +28,7 @@ References
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 # ---------------------------------------------------------------------------
 # Soft Isaac Lab imports — allow package import without Isaac Lab installed
@@ -70,12 +70,12 @@ SO101_JOINT_NAMES: list[str] = [
     #     # Load USD and print articulation joint names
     #   "
     # Source URDF: https://github.com/TheRobotStudio/SO-ARM100
-    "Rotation",     # Base rotation (shoulder pan)
-    "Pitch",        # Shoulder pitch
-    "Elbow",        # Elbow flexion
+    "Rotation",  # Base rotation (shoulder pan)
+    "Pitch",  # Shoulder pitch
+    "Elbow",  # Elbow flexion
     "Wrist_Pitch",  # Wrist pitch
-    "Wrist_Roll",   # Wrist roll
-    "Jaw",          # End-effector / gripper (maps to LeRobot gripper dim)
+    "Wrist_Roll",  # Wrist roll
+    "Jaw",  # End-effector / gripper (maps to LeRobot gripper dim)
 ]
 """Ordered list of SO-101 joint names as they appear in the URDF/USD.
 
@@ -126,8 +126,8 @@ def resolve_usd_path() -> str:
 
 
 def build_articulation_cfg(
-    usd_path: Optional[Path] = None,
-) -> "ArticulationCfg | None":
+    usd_path: Path | None = None,
+) -> ArticulationCfg | None:
     """Build and return the SO-101 ``ArticulationCfg`` at call time.
 
     Parameters

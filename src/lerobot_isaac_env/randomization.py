@@ -28,7 +28,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Tuple, Optional
+from typing import TYPE_CHECKING
 
 # ---------------------------------------------------------------------------
 # Soft Isaac Lab imports
@@ -103,8 +103,8 @@ class LightingRandomizationCfg:
     """
 
     enabled: bool = False
-    intensity_range: Tuple[float, float] = (0.8, 1.5)
-    color_temperature_range_K: Tuple[float, float] = (3000.0, 6500.0)
+    intensity_range: tuple[float, float] = (0.8, 1.5)
+    color_temperature_range_K: tuple[float, float] = (3000.0, 6500.0)
 
 
 @dataclass
@@ -122,8 +122,8 @@ class FrictionRandomizationCfg:
     """
 
     enabled: bool = False
-    table_range: Tuple[float, float] = (0.3, 0.8)
-    joint_range: Tuple[float, float] = (0.0, 0.05)
+    table_range: tuple[float, float] = (0.3, 0.8)
+    joint_range: tuple[float, float] = (0.0, 0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +132,9 @@ class FrictionRandomizationCfg:
 
 
 def reset_robot_joints(
-    position_range: Tuple[float, float] = (-0.1, 0.1),
-    velocity_range: Tuple[float, float] = (0.0, 0.0),
-) -> Optional["EventTermCfg"]:
+    position_range: tuple[float, float] = (-0.1, 0.1),
+    velocity_range: tuple[float, float] = (0.0, 0.0),
+) -> EventTermCfg | None:
     """Build an EventTermCfg that resets robot joints at episode reset.
 
     Parameters
@@ -163,8 +163,8 @@ def reset_robot_joints(
 
 
 def randomize_object_position(
-    pose_range: Optional[dict] = None,
-) -> Optional["EventTermCfg"]:
+    pose_range: dict | None = None,
+) -> EventTermCfg | None:
     """Build an EventTermCfg that randomizes the object position at reset.
 
     Parameters
@@ -200,8 +200,8 @@ def randomize_object_position(
 
 
 def randomize_lighting_intensity(
-    intensity_range: Tuple[float, float] = (0.8, 1.5),
-) -> Optional["EventTermCfg"]:
+    intensity_range: tuple[float, float] = (0.8, 1.5),
+) -> EventTermCfg | None:
     """Build an EventTermCfg that randomizes dome light intensity at reset.
 
     Parameters
@@ -238,9 +238,9 @@ def randomize_lighting_intensity(
 
 
 def randomize_friction(
-    static_friction_range: Tuple[float, float] = (0.3, 0.8),
-    dynamic_friction_range: Tuple[float, float] = (0.3, 0.8),
-) -> Optional["EventTermCfg"]:
+    static_friction_range: tuple[float, float] = (0.3, 0.8),
+    dynamic_friction_range: tuple[float, float] = (0.3, 0.8),
+) -> EventTermCfg | None:
     """Build an EventTermCfg that randomizes rigid body friction at reset.
 
     Parameters
@@ -303,9 +303,5 @@ class SO101DomainRandomizationCfg:
     object_pose: ObjectPoseRandomizationCfg = field(
         default_factory=ObjectPoseRandomizationCfg
     )
-    lighting: LightingRandomizationCfg = field(
-        default_factory=LightingRandomizationCfg
-    )
-    friction: FrictionRandomizationCfg = field(
-        default_factory=FrictionRandomizationCfg
-    )
+    lighting: LightingRandomizationCfg = field(default_factory=LightingRandomizationCfg)
+    friction: FrictionRandomizationCfg = field(default_factory=FrictionRandomizationCfg)

@@ -70,11 +70,11 @@ def _require_isaaclab() -> None:
 
 
 def success_reward(
-    env: "ManagerBasedRLEnv",
+    env: ManagerBasedRLEnv,
     std: float = 0.1,
     robot_cfg: Any = None,
     object_cfg: Any = None,
-) -> "torch.Tensor":
+) -> torch.Tensor:
     """Distance-based reward: Gaussian kernel on end-effector-to-object distance.
 
     Reward peaks at 1.0 when the end-effector is at the target (distance=0)
@@ -120,11 +120,11 @@ def success_reward(
     dist = torch.norm(ee_pos - obj_pos, dim=-1)  # (N,)
 
     # Gaussian kernel reward
-    reward = torch.exp(-torch.square(dist) / (2 * std ** 2))
+    reward = torch.exp(-torch.square(dist) / (2 * std**2))
     return reward
 
 
-def action_l2_penalty(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def action_l2_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     """L2 penalty on the applied action to discourage large joint movements.
 
     Wraps ``isaaclab.envs.mdp.action_rate_l2`` which computes the squared
@@ -145,7 +145,7 @@ def action_l2_penalty(env: "ManagerBasedRLEnv") -> "torch.Tensor":
     return _mdp.action_rate_l2(env)
 
 
-def joint_vel_penalty(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def joint_vel_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Penalty on joint velocity magnitude to encourage smooth motion.
 
     Uses the squared L2 norm of joint velocities.  Apply with a small negative
@@ -169,9 +169,9 @@ def joint_vel_penalty(env: "ManagerBasedRLEnv") -> "torch.Tensor":
 
 
 def progress_reward(
-    env: "ManagerBasedRLEnv",
+    env: ManagerBasedRLEnv,
     distance_scale: float = 1.0,
-) -> "torch.Tensor":
+) -> torch.Tensor:
     """Dense distance-shaping reward: negative distance to goal, normalised.
 
     Disabled by default (weight=0.0 in SO101EnvCfg).  Enable per-task

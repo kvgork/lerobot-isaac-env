@@ -44,10 +44,10 @@ from lerobot_isaac_env.tasks.pick import PickEnvCfg  # noqa: F401
 from lerobot_isaac_env.tasks.pick_and_place import PickAndPlaceEnvCfg  # noqa: F401
 
 if TYPE_CHECKING:
-    from lerobot_isaac_env.so101_env_cfg import SO101EnvCfg  # noqa: F811
-    from lerobot_isaac_env.so101_articulation import build_articulation_cfg  # noqa: F811
-    from lerobot_isaac_env.tasks.pick import PickEnvCfg  # noqa: F811
-    from lerobot_isaac_env.tasks.pick_and_place import PickAndPlaceEnvCfg  # noqa: F811
+    try:
+        from isaaclab.envs import ManagerBasedRLEnv  # type: ignore[import]
+    except ImportError:
+        from omni.isaac.lab.envs import ManagerBasedRLEnv  # type: ignore[import]  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ def make_env(
     task: str = "pick",
     num_envs: int = 1,
     headless: bool = True,
-) -> "ManagerBasedRLEnv":
+) -> ManagerBasedRLEnv:
     """Create a gymnasium-wrapped Isaac Lab environment for the given task.
 
     Parameters

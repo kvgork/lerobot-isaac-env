@@ -67,7 +67,7 @@ def _require_isaaclab() -> None:
 # ---------------------------------------------------------------------------
 
 
-def time_out(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def time_out(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Truncate episode when the maximum episode length is reached.
 
     This is a *truncation* (not a terminal state) — the episode ended due to
@@ -92,11 +92,11 @@ def time_out(env: "ManagerBasedRLEnv") -> "torch.Tensor":
 
 
 def success_termination(
-    env: "ManagerBasedRLEnv",
+    env: ManagerBasedRLEnv,
     threshold: float = 0.05,
     robot_cfg: None = None,
     object_cfg: None = None,
-) -> "torch.Tensor":
+) -> torch.Tensor:
     """Terminate episode when end-effector reaches the target within threshold.
 
     Computes end-effector-to-object Euclidean distance and returns True for

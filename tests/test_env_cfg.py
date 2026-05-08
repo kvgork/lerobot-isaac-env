@@ -7,8 +7,6 @@ and overridden without Isaac Lab being installed.
 
 from __future__ import annotations
 
-import dataclasses
-
 
 def test_so101_env_cfg_default_construction():
     """SO101EnvCfg must construct with default values."""
@@ -177,7 +175,7 @@ def test_so101_env_cfg_instantiates_as_dataclass_without_isaaclab():
     The configclass decorator falls back to a no-op (lambda cls: cls) when
     Isaac Lab is absent, so SO101EnvCfg behaves as a standard @dataclass.
     """
-    from lerobot_isaac_env.so101_env_cfg import SO101EnvCfg, _ISAACLAB_AVAILABLE
+    from lerobot_isaac_env.so101_env_cfg import SO101EnvCfg
 
     cfg = SO101EnvCfg()
     # Verify it's a dataclass or at minimum has the expected fields

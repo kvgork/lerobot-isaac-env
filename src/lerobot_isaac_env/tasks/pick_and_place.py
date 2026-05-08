@@ -25,14 +25,11 @@ References
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from lerobot_isaac_env.so101_env_cfg import (
     SO101EnvCfg,
     SO101EventsCfg,
-    SO101RewardsCfg,
-    _ISAACLAB_AVAILABLE,
 )
 from lerobot_isaac_env.randomization import (
     ObjectPoseRandomizationCfg,
@@ -150,7 +147,9 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
 
         # Validate stage
         if self.stage not in (2, 3, 4):
-            raise ValueError(f"pick_and_place: stage must be 2, 3, or 4; got {self.stage}")
+            raise ValueError(
+                f"pick_and_place: stage must be 2, 3, or 4; got {self.stage}"
+            )
 
         # Apply stage-dependent DR event config
         self.events = _events_for_stage(self.stage)

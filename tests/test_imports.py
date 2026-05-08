@@ -6,7 +6,6 @@ These tests confirm the package is importable in a bare Python environment
 (e.g., CI without Isaac Lab, or the scaffold environment used in Phase 1).
 """
 
-import importlib
 import sys
 
 
@@ -85,7 +84,9 @@ def test_make_env_raises_without_isaaclab():
         make_env("pick")
 
     # Confirm it's a clean error message, not an AttributeError fallthrough
-    assert "Isaac Lab" in str(exc_info.value) or "isaaclab" in str(exc_info.value).lower()
+    assert (
+        "Isaac Lab" in str(exc_info.value) or "isaaclab" in str(exc_info.value).lower()
+    )
 
 
 def test_joint_names_length():
@@ -141,6 +142,7 @@ def test_build_articulation_cfg_returns_none_without_isaaclab():
 
     if mod._ISAACLAB_AVAILABLE:
         import pytest
+
         pytest.skip("Isaac Lab is present; this test only applies to scaffold mode.")
 
     result = mod.build_articulation_cfg()
@@ -187,12 +189,8 @@ def test_so101_articulation_importable_with_isaaclab_stub(tmp_path, monkeypatch)
     pkg_dir = stub_dir / "isaaclab"
     pkg_dir.mkdir()
     (pkg_dir / "__init__.py").write_text("# stub\n")
-    (pkg_dir / "assets.py").write_text(
-        "class ArticulationCfg:\n    pass\n"
-    )
-    (pkg_dir / "actuators.py").write_text(
-        "class ImplicitActuatorCfg:\n    pass\n"
-    )
+    (pkg_dir / "assets.py").write_text("class ArticulationCfg:\n    pass\n")
+    (pkg_dir / "actuators.py").write_text("class ImplicitActuatorCfg:\n    pass\n")
 
     monkeypatch.syspath_prepend(str(stub_dir))
 

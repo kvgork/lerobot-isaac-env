@@ -23,16 +23,12 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from lerobot_isaac_env.so101_env_cfg import (
     SO101EnvCfg,
     SO101EventsCfg,
-    SO101RewardsCfg,
     SO101TerminationsCfg,
     TerminationsCfg,
-    RewardsCfg,
-    _ISAACLAB_AVAILABLE,
 )
 
 # ---------------------------------------------------------------------------
@@ -133,8 +129,6 @@ class PickEnvCfg(SO101EnvCfg):
 
         # Wire success termination measuring gripper-to-object distance
         if _IL_AVAILABLE and _mdp is not None and TerminationTermCfg is not None:
-            from lerobot_isaac_env import terminations
-
             self.terminations = TerminationsCfg.__new__(TerminationsCfg)
             self.terminations.time_out = SO101TerminationsCfg().timeout  # noqa
             # Use custom success_termination from terminations.py

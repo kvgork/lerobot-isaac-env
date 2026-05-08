@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def joint_pos(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def joint_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return joint positions (relative to default pose) for all SO-101 joints.
 
     Wraps ``isaaclab.envs.mdp.joint_pos_rel``.
@@ -95,7 +95,7 @@ def joint_pos(env: "ManagerBasedRLEnv") -> "torch.Tensor":
     return _mdp.joint_pos_rel(env)
 
 
-def joint_vel(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def joint_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return joint velocities (relative to default) for all SO-101 joints.
 
     Wraps ``isaaclab.envs.mdp.joint_vel_rel``.
@@ -115,13 +115,11 @@ def joint_vel(env: "ManagerBasedRLEnv") -> "torch.Tensor":
     LeRobot column: ``observation.state[6:12]`` (concatenated with joint_pos).
     """
     if not _ISAACLAB_AVAILABLE or _mdp is None:
-        raise ImportError(
-            "Isaac Lab is required to run observation term functions."
-        )
+        raise ImportError("Isaac Lab is required to run observation term functions.")
     return _mdp.joint_vel_rel(env)
 
 
-def last_action(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def last_action(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return the last action applied to the environment.
 
     Wraps ``isaaclab.envs.mdp.last_action``.
@@ -137,9 +135,7 @@ def last_action(env: "ManagerBasedRLEnv") -> "torch.Tensor":
         Shape ``(num_envs, action_dim)`` — last action sent to the env.
     """
     if not _ISAACLAB_AVAILABLE or _mdp is None:
-        raise ImportError(
-            "Isaac Lab is required to run observation term functions."
-        )
+        raise ImportError("Isaac Lab is required to run observation term functions.")
     return _mdp.last_action(env)
 
 
@@ -148,7 +144,7 @@ def last_action(env: "ManagerBasedRLEnv") -> "torch.Tensor":
 # ---------------------------------------------------------------------------
 
 
-def wrist_camera_rgb(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def wrist_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return the wrist camera RGB frame.
 
     .. note::
@@ -175,7 +171,7 @@ def wrist_camera_rgb(env: "ManagerBasedRLEnv") -> "torch.Tensor":
     )
 
 
-def overhead_camera_rgb(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def overhead_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return the overhead (bird's-eye) camera RGB frame.
 
     .. note::
@@ -195,7 +191,7 @@ def overhead_camera_rgb(env: "ManagerBasedRLEnv") -> "torch.Tensor":
     )
 
 
-def object_pose(env: "ManagerBasedRLEnv") -> "torch.Tensor":
+def object_pose(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return the 6-DoF pose of the manipulation target object.
 
     Privileged observation (available to critic, not policy).  Uses
