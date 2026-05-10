@@ -20,7 +20,7 @@ References
 - Isaac Lab ManagerBasedRLEnv:
   https://isaac-sim.github.io/IsaacLab/source/api/lab/isaaclab.envs.html
 - SO-101 6-stage curriculum:
-  /home/koen/tools/claude_code/plans/2026-05-06-lerobot-isaac-workspace-plan.md
+  ${CLAUDE_CODE_ROOT}/plans/2026-05-06-lerobot-isaac-workspace-plan.md
 """
 
 from __future__ import annotations

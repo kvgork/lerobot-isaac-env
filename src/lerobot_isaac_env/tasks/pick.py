@@ -14,7 +14,7 @@ Registered gym ID: ``Isaac-SO101-Pick-v0``
 References
 ----------
 - SO-101 curriculum: 6-stage manipulation ladder.
-  See /home/koen/tools/claude_code/plans/2026-05-06-lerobot-isaac-workspace-plan.md
+  See ${CLAUDE_CODE_ROOT}/plans/2026-05-06-lerobot-isaac-workspace-plan.md
   Section 4 (Phase 1).
 - Isaac Lab ManagerBasedRLEnv gym registration:
   https://isaac-sim.github.io/IsaacLab/source/api/lab/isaaclab.envs.html

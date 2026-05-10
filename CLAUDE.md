@@ -136,6 +136,6 @@ See `../../docs/ARCHITECTURE.md` (spinout section).
 
 ## Source-of-Truth Pointers
 
-- Build plan: `/home/koen/tools/claude_code/plans/2026-05-06-lerobot-isaac-workspace-plan.md` — Phase 1
+- Build plan: `${CLAUDE_CODE_ROOT}/plans/2026-05-06-lerobot-isaac-workspace-plan.md` — Phase 1
 - Component doc: `../../docs/components/isaac_env.md`
 - Isaac Lab Manager API: https://isaac-sim.github.io/IsaacLab/source/api/lab/isaaclab.envs.html
