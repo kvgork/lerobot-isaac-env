@@ -453,6 +453,16 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
                     # USD not yet available — scene.robot stays None.
                     pass
 
+            # Wire the action manager with a real JointPositionActionCfg.
+            # The dataclass default for `self.actions` is the
+            # `SO101ActionsCfg` placeholder with no action terms (legacy
+            # backward-compat shape). Without an action term, Isaac Lab's
+            # ActionManager reports total_action_dim=0 and `env.step()`
+            # raises `Invalid action shape, expected: 0`. Replace with the
+            # real `ActionsCfg(joint_position=mdp.JointPositionActionCfg(...))`.
+            if mdp is not None:
+                self.actions = ActionsCfg()
+
         # Call parent __post_init__ if defined (Isaac Lab may define it).
         try:
             super().__post_init__()  # type: ignore[misc]
