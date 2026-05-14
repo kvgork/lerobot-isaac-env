@@ -174,12 +174,27 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
             except Exception:
                 pass
 
-            # Add target bin (simplified as a flat marker for now)
+            # Add target bin (simplified as a flat kinematic marker).
+            # CuboidCfg alone does NOT apply USD RigidBodyAPI — `RigidObjectCfg`
+            # then errors during init with "Failed to find a rigid body when
+            # resolving '/World/envs/env_.*/TargetBin'". We attach
+            # `rigid_props` (with `kinematic_enabled=True` so it never falls
+            # through the floor), `mass_props`, and `collision_props` so the
+            # spawn produces a proper rigid prim.
             try:
                 self.scene.target_bin = RigidObjectCfg(
                     prim_path="{ENV_REGEX_NS}/TargetBin",
                     spawn=sim_utils.CuboidCfg(
                         size=(0.15, 0.15, 0.02),
+                        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                            kinematic_enabled=True,
+                            disable_gravity=True,
+                        ),
+                        mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+                        collision_props=sim_utils.CollisionPropertiesCfg(),
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(0.2, 0.6, 0.2),
+                        ),
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
                         pos=(0.5, -0.2, 0.01),
