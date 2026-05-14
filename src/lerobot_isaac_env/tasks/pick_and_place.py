@@ -192,9 +192,10 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         ),
                         mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
                         collision_props=sim_utils.CollisionPropertiesCfg(),
-                        visual_material=sim_utils.PreviewSurfaceCfg(
-                            diffuse_color=(0.2, 0.6, 0.2),
-                        ),
+                        # Omit visual_material on Isaac Sim 6.0 — PreviewSurfaceCfg
+                        # routes through CreateShaderPrimFromSdrCommand which
+                        # changed its constructor signature (the `name` kwarg
+                        # is gone). Plain cuboid is fine for a marker.
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
                         pos=(0.5, -0.2, 0.01),
