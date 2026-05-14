@@ -63,19 +63,31 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 SO101_JOINT_NAMES: list[str] = [
-    # 6-DOF arm joints (proximal to distal).
-    # NOTE: Verify these names against the actual converted USD by running:
-    #   python -c "
-    #     import isaaclab
-    #     # Load USD and print articulation joint names
-    #   "
-    # Source URDF: https://github.com/TheRobotStudio/SO-ARM100
-    "Rotation",  # Base rotation (shoulder pan)
-    "Pitch",  # Shoulder pitch
-    "Elbow",  # Elbow flexion
-    "Wrist_Pitch",  # Wrist pitch
-    "Wrist_Roll",  # Wrist roll
-    "Jaw",  # End-effector / gripper (maps to LeRobot gripper dim)
+    # 6-DOF arm joints (proximal to distal), matching `so101_new_calib.urdf`
+    # in https://github.com/TheRobotStudio/SO-ARM100 (the current canonical
+    # URDF). The legacy CAD-style names (Rotation/Pitch/Elbow/Wrist_Pitch/
+    # Wrist_Roll/Jaw) were valid for `so101_old_calib.urdf` only and produced
+    # the runtime error
+    #   ValueError: Not all regular expressions are matched (Rotation: [], ...)
+    #   Available strings: ['shoulder_pan', 'shoulder_lift', 'elbow_flex',
+    #                       'wrist_flex', 'wrist_roll', 'gripper']
+    # against an Isaac Lab articulation loaded from the new URDF.
+    "shoulder_pan",  # Base rotation
+    "shoulder_lift",  # Shoulder pitch
+    "elbow_flex",  # Elbow flexion
+    "wrist_flex",  # Wrist pitch
+    "wrist_roll",  # Wrist roll
+    "gripper",  # End-effector (maps to LeRobot gripper dim)
+]
+
+# Backwards-compatibility alias for callers still expecting the old CAD names.
+_SO101_LEGACY_JOINT_NAMES: list[str] = [
+    "Rotation",
+    "Pitch",
+    "Elbow",
+    "Wrist_Pitch",
+    "Wrist_Roll",
+    "Jaw",
 ]
 """Ordered list of SO-101 joint names as they appear in the URDF/USD.
 
