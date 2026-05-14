@@ -50,19 +50,29 @@ __all__ = [
 # registered". Register here at import-time, soft-skipping when Isaac Lab is
 # not present (matches the ADR-0003 soft-import discipline).
 
+_ENTRY_POINT_CANDIDATES = (
+    "isaaclab.envs:ManagerBasedRLEnv",
+    "omni.isaac.lab.envs:ManagerBasedRLEnv",
+)
+
+
 def _register_envs() -> None:  # pragma: no cover — exercised at runtime only
+    """Register `Isaac-SO101-*-v0` env ids with gymnasium.
+
+    Gymnasium accepts the entry_point as a string; the import only happens
+    later in `gym.make(...)`. So we DON'T require `isaaclab.envs` to be
+    importable here — that may fail in legitimate cases (e.g. some
+    `isaaclab_contrib` sub-packages aren't installed yet). We pick the first
+    namespace string and let gym lazy-resolve it on make.
+    """
     try:
         import gymnasium as gym
-        # isaaclab is the new namespace (Isaac Lab 2.x); the legacy
-        # `omni.isaac.lab.envs` namespace is also supported as a fallback.
-        try:
-            from isaaclab.envs import ManagerBasedRLEnv  # noqa: F401
-            entry_point = "isaaclab.envs:ManagerBasedRLEnv"
-        except ImportError:
-            from omni.isaac.lab.envs import ManagerBasedRLEnv  # noqa: F401
-            entry_point = "omni.isaac.lab.envs:ManagerBasedRLEnv"
     except ImportError:
         return
+
+    # Try to detect which isaaclab namespace exists, but don't bail on
+    # ImportError of sub-packages — `gym.make` resolves entry_point lazily.
+    entry_point = _ENTRY_POINT_CANDIDATES[0]
 
     pending: list[tuple[str, type]] = [
         ("Isaac-SO101-Pick-v0", PickEnvCfg),
@@ -75,14 +85,18 @@ def _register_envs() -> None:  # pragma: no cover — exercised at runtime only
         if env_id in gym.envs.registry:
             continue
         try:
+            cfg = cfg_cls()
+        except NotImplementedError:
+            # Insertion stub etc. — skip without warning.
+            continue
+        try:
             gym.register(
                 id=env_id,
                 entry_point=entry_point,
                 disable_env_checker=True,
-                kwargs={"cfg": cfg_cls()},
+                kwargs={"cfg": cfg},
             )
         except Exception:  # noqa: BLE001
-            # Insertion stub raises NotImplementedError on construction; skip.
             continue
 
 
