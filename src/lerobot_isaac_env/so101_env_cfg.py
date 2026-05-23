@@ -36,8 +36,9 @@ try:
     from isaaclab.envs import ManagerBasedRLEnvCfg  # type: ignore[import]
     from isaaclab.scene import InteractiveSceneCfg  # type: ignore[import]
     from isaaclab.utils import configclass  # type: ignore[import]
-    from isaaclab.sim import SimulationCfg  # type: ignore[import]
+    from isaaclab.sim import SimulationCfg, PinholeCameraCfg  # type: ignore[import]
     from isaaclab.assets import AssetBaseCfg  # type: ignore[import]
+    from isaaclab.sensors import CameraCfg  # type: ignore[import]
     import isaaclab.sim as sim_utils  # type: ignore[import]
     from isaaclab.managers import (  # type: ignore[import]
         ObservationGroupCfg,
@@ -56,8 +57,9 @@ except ImportError:
         from omni.isaac.lab.envs import ManagerBasedRLEnvCfg  # type: ignore[import]
         from omni.isaac.lab.scene import InteractiveSceneCfg  # type: ignore[import]
         from omni.isaac.lab.utils import configclass  # type: ignore[import]
-        from omni.isaac.lab.sim import SimulationCfg  # type: ignore[import]
+        from omni.isaac.lab.sim import SimulationCfg, PinholeCameraCfg  # type: ignore[import]
         from omni.isaac.lab.assets import AssetBaseCfg  # type: ignore[import]
+        from omni.isaac.lab.sensors import CameraCfg  # type: ignore[import]
         import omni.isaac.lab.sim as sim_utils  # type: ignore[import]
         from omni.isaac.lab.managers import (  # type: ignore[import]
             ObservationGroupCfg,
@@ -75,7 +77,9 @@ except ImportError:
         InteractiveSceneCfg = object  # scaffold
         configclass = lambda cls: cls  # noqa: E731 — no-op decorator
         SimulationCfg = None  # scaffold
+        PinholeCameraCfg = None  # scaffold
         AssetBaseCfg = object  # scaffold
+        CameraCfg = None  # scaffold
         sim_utils = None  # scaffold
         ObservationGroupCfg = object  # scaffold
         ObservationTermCfg = object  # scaffold
@@ -113,6 +117,13 @@ class SO101SceneCfg(InteractiveSceneCfg):
     - ``robot``: SO-101 articulation (populated in SO101EnvCfg.__post_init__).
     - ``ground``: Flat ground plane.
     - ``dome_light``: Uniform dome light.
+    - ``wrist_camera``: Wrist-mounted RGB camera (None unless cameras enabled).
+    - ``overhead_camera``: Overhead bird's-eye RGB camera (None unless enabled).
+
+    Cameras are populated in ``SO101EnvCfg.__post_init__`` when
+    ``enable_cameras=True``. The default config does NOT instantiate cameras
+    so headless training without ``AppLauncher(enable_cameras=True)`` still
+    works.
     """
 
     # Robot articulation — populated in SO101EnvCfg.__post_init__
@@ -141,6 +152,87 @@ class SO101SceneCfg(InteractiveSceneCfg):
             if _ISAACLAB_AVAILABLE and sim_utils is not None
             else None
         )
+    )
+
+    # Cameras (Bundle C.1) — populated by SO101EnvCfg.__post_init__ when
+    # SO101EnvCfg.enable_cameras=True. Default: None (cameras off).
+    wrist_camera: Any = None
+    overhead_camera: Any = None
+
+
+# ---------------------------------------------------------------------------
+# Camera factory helpers (Bundle C.1)
+# ---------------------------------------------------------------------------
+
+
+def _make_wrist_camera_cfg(
+    resolution: tuple[int, int] = (128, 128),
+    update_period: float = 1 / 30,
+) -> Any:
+    """Build a CameraCfg for the wrist-mounted RGB camera.
+
+    Mount point: attached to the gripper / end-effector frame via the
+    ``{ENV_REGEX_NS}/Robot/.../wrist_camera_mount`` prim. Pose offset is small
+    forward-and-down so the camera looks at the gripper tip.
+
+    Parameters
+    ----------
+    resolution : (width, height)
+        Default 128x128 to fit RTX 3080 10 GB at 2 cameras. Scale to 256x256
+        when GPU budget allows.
+    update_period : float
+        Camera tick period in seconds. 1/30 = 30 Hz, matching policy rate.
+    """
+    if not (_ISAACLAB_AVAILABLE and CameraCfg is not None and PinholeCameraCfg is not None):
+        return None
+    return CameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/wrist_camera",
+        update_period=update_period,
+        height=resolution[1],
+        width=resolution[0],
+        data_types=["rgb"],
+        spawn=PinholeCameraCfg(
+            focal_length=12.0,
+            focus_distance=400.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.01, 1.5),
+        ),
+        offset=CameraCfg.OffsetCfg(  # type: ignore[attr-defined]
+            pos=(0.05, 0.0, 0.02),
+            rot=(0.7071, 0.0, 0.7071, 0.0),  # face forward + slightly down
+            convention="ros",
+        ),
+    )
+
+
+def _make_overhead_camera_cfg(
+    resolution: tuple[int, int] = (128, 128),
+    update_period: float = 1 / 30,
+) -> Any:
+    """Build a CameraCfg for the overhead (bird's-eye) RGB camera.
+
+    Mounted ~0.8 m above the workspace pointing straight down. Provides a
+    static viewpoint of the table/workspace independent of arm motion.
+    """
+    if not (_ISAACLAB_AVAILABLE and CameraCfg is not None and PinholeCameraCfg is not None):
+        return None
+    return CameraCfg(
+        prim_path="{ENV_REGEX_NS}/overhead_camera",
+        update_period=update_period,
+        height=resolution[1],
+        width=resolution[0],
+        data_types=["rgb"],
+        spawn=PinholeCameraCfg(
+            focal_length=24.0,
+            focus_distance=800.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.05, 2.0),
+        ),
+        offset=CameraCfg.OffsetCfg(  # type: ignore[attr-defined]
+            pos=(0.4, 0.0, 0.8),
+            rot=(0.0, 0.7071, 0.0, 0.7071),  # face straight down
+            convention="ros",
+        ),
     )
 
 
@@ -182,8 +274,8 @@ class ActionsCfg:
 class PolicyObsGroupCfg(ObservationGroupCfg):
     """Policy observation group: joint_pos_rel, joint_vel_rel, last_action.
 
-    Camera observations deferred — see observations.py stubs and
-    Isaac Lab tutorial 04 for CameraCfg wiring.
+    Camera obs terms (wrist_camera, overhead_camera) are added in
+    SO101EnvCfg.__post_init__ when ``enable_cameras=True``.
     """
 
     joint_pos: Any = field(
@@ -207,9 +299,13 @@ class PolicyObsGroupCfg(ObservationGroupCfg):
             else None
         )
     )
-    # Camera observations deferred.
-    # TODO: Add wrist_camera and overhead_camera once CameraCfg is wired in scene.
-    # See https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/
+
+    # Camera obs — None unless enabled. Populated in SO101EnvCfg.__post_init__
+    # via _wire_camera_obs_terms(). LeRobotDataset v3 column names:
+    #   wrist_camera_rgb     → observation.images.wrist
+    #   overhead_camera_rgb  → observation.images.overhead
+    wrist_camera_rgb: Any = None
+    overhead_camera_rgb: Any = None
 
 
 @configclass
@@ -234,17 +330,11 @@ class RewardsCfg:
     action_penalty: L2 action-rate regularisation.
     """
 
-    success_bonus: Any = field(
-        default_factory=lambda: (
-            RewardTermCfg(
-                func=mdp.is_terminated,
-                params={"term_keys": ["success"]},
-                weight=5.0,
-            )
-            if _ISAACLAB_AVAILABLE and mdp is not None
-            else None
-        )
-    )
+    # success_bonus depends on a `success` termination term existing in
+    # TerminationsCfg. Default TerminationsCfg has only `time_out` →
+    # is_terminated_term raises ValueError "success: []". Tasks that wire
+    # a real success termination set this field themselves; default = None.
+    success_bonus: Any = None
     action_penalty: Any = field(
         default_factory=lambda: (
             RewardTermCfg(
@@ -385,7 +475,16 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
         Physics simulation config; set to ``SimulationCfg(dt=1/120)``
         when Isaac Lab is available.
     scene : SO101SceneCfg | None
-        Scene with robot articulation, ground plane, dome light.
+        Scene with robot articulation, ground plane, dome light, and
+        (optionally) wrist + overhead cameras.
+    enable_cameras : bool
+        If True, populates ``scene.wrist_camera`` + ``scene.overhead_camera``
+        with default CameraCfgs and wires obs terms. Requires
+        ``AppLauncher(enable_cameras=True)`` at the app level.
+    camera_resolution : tuple[int, int]
+        (width, height) for both cameras. Default 128×128 fits RTX 3080 10 GB
+        comfortably for 2 cameras + single env. Scale to 256×256 when budget
+        allows; benchmark before going higher.
 
     The ``observations``, ``actions``, ``rewards``, ``terminations``, and
     ``events`` fields use backward-compatible placeholder types so that
@@ -413,6 +512,14 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
     scene: Any = field(default=None)
     """SO101SceneCfg with robot, ground, light.  Populated in __post_init__."""
 
+    # --- Camera flags (Bundle C.1) ---
+    enable_cameras: bool = False
+    """If True, wires wrist + overhead CameraCfgs + obs terms. Requires
+    AppLauncher(enable_cameras=True) at app launch."""
+
+    camera_resolution: tuple = (128, 128)
+    """(width, height) per camera. Default 128² is RTX 3080 friendly."""
+
     # --- MDP manager sub-configs (backward-compat placeholder types) ---
     observations: SO101ObservationsCfg = field(default_factory=SO101ObservationsCfg)
     """Observation group config.  Column names match LeRobotDataset v3.0."""
@@ -428,6 +535,27 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
 
     events: SO101EventsCfg = field(default_factory=SO101EventsCfg)
     """Domain randomization event config (disabled by default)."""
+
+    def _wire_cameras(self) -> None:
+        """Populate scene + obs terms with camera cfgs. Called by __post_init__
+        when ``enable_cameras=True``."""
+        from . import observations as _obs_mod
+
+        if not (_ISAACLAB_AVAILABLE and CameraCfg is not None):
+            return
+
+        # Scene-side cfgs
+        self.scene.wrist_camera = _make_wrist_camera_cfg(self.camera_resolution)
+        self.scene.overhead_camera = _make_overhead_camera_cfg(self.camera_resolution)
+
+        # Observation-term cfgs (channel-first uint8, LeRobot v3 convention)
+        if hasattr(self.observations, "policy") and self.observations.policy is not None:
+            self.observations.policy.wrist_camera_rgb = ObservationTermCfg(
+                func=_obs_mod.wrist_camera_rgb,
+            )
+            self.observations.policy.overhead_camera_rgb = ObservationTermCfg(
+                func=_obs_mod.overhead_camera_rgb,
+            )
 
     def __post_init__(self) -> None:
         """Wire real Isaac Lab configs when Isaac Lab is available."""
@@ -462,6 +590,21 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
             # real `ActionsCfg(joint_position=mdp.JointPositionActionCfg(...))`.
             if mdp is not None:
                 self.actions = ActionsCfg()
+
+            # Wire the observation manager with the real PolicyObsGroupCfg so
+            # joint_pos / joint_vel / last_action terms have ObservationTermCfg
+            # instances. Without this, ObservationManager has 0 terms.
+            self.observations = ObservationsCfg()
+
+            # Wire the reward manager with the real RewardsCfg (sparse
+            # success_bonus + action_penalty). Tasks (e.g.
+            # PickAndPlaceEnvCfg) may override or extend in their own
+            # __post_init__ to add dense shaping like `progress_reward`.
+            self.rewards = RewardsCfg()
+
+            # Wire cameras + camera obs terms if enabled.
+            if self.enable_cameras:
+                self._wire_cameras()
 
         # Call parent __post_init__ if defined (Isaac Lab may define it).
         try:

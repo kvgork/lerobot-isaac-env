@@ -178,6 +178,30 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                     "source_object spawn failed: %s", exc
                 )
 
+            # Wire dense `progress_reward` (EE-to-object distance shaping)
+            # alongside the parent's sparse success_bonus. Without dense
+            # shaping the DreamerV3 actor has no gradient signal until it
+            # accidentally succeeds — sample-inefficient on RTX 3080 budgets.
+            # `progress_reward` is exported by lerobot_isaac_env.rewards;
+            # weight=1.0 normalises to roughly [-1, 0] per step.
+            try:
+                from lerobot_isaac_env import rewards as _rewards_mod
+                from isaaclab.managers import SceneEntityCfg  # type: ignore[import]
+                if RewardTermCfg is not None and self.rewards is not None:
+                    self.rewards.progress = RewardTermCfg(
+                        func=_rewards_mod.progress_reward,
+                        params={
+                            "distance_scale": 1.0,
+                            "object_cfg": SceneEntityCfg("source_object"),
+                        },
+                        weight=1.0,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "progress_reward wiring failed: %s", exc
+                )
+
             # Add target bin as a STATIC visual marker (AssetBaseCfg, not
             # RigidObjectCfg). Isaac Sim 6.0 + PhysX 6.0 hang sim.reset
             # when a kinematic RigidObjectCfg sources its geometry from

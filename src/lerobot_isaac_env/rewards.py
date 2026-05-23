@@ -171,11 +171,15 @@ def joint_vel_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
 def progress_reward(
     env: ManagerBasedRLEnv,
     distance_scale: float = 1.0,
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
 ) -> torch.Tensor:
     """Dense distance-shaping reward: negative distance to goal, normalised.
 
-    Disabled by default (weight=0.0 in SO101EnvCfg).  Enable per-task
-    by setting ``cfg.rewards.progress.weight > 0``.
+    Disabled by default (weight=0.0 in SO101EnvCfg). Enable per-task by
+    setting ``cfg.rewards.progress.weight > 0`` and providing the
+    ``object_cfg`` ``SceneEntityCfg`` pointing at the task's manipulation
+    object (e.g. ``SceneEntityCfg("source_object")`` for PickAndPlaceEnvCfg).
 
     Parameters
     ----------
@@ -183,6 +187,14 @@ def progress_reward(
         Isaac Lab ``ManagerBasedRLEnv`` instance.
     distance_scale:
         Divisor to normalise the distance before negating.
+    robot_cfg:
+        ``SceneEntityCfg`` identifying the robot. Defaults to the
+        ``robot`` scene entity.
+    object_cfg:
+        ``SceneEntityCfg`` identifying the manipulation object. Defaults
+        to a SceneEntityCfg("object"). PickAndPlaceEnvCfg passes
+        ``SceneEntityCfg("source_object")`` because its task object
+        lives at that scene name.
 
     Returns
     -------
@@ -191,8 +203,13 @@ def progress_reward(
     """
     _require_isaaclab()
 
-    robot = env.scene["robot"]
-    obj = env.scene["object"]
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("object")
+
+    robot = env.scene[robot_cfg.name]
+    obj = env.scene[object_cfg.name]
 
     ee_pos = robot.data.body_pos_w[:, -1, :]  # last body = end-effector (N, 3)
     obj_pos = obj.data.root_pos_w  # (N, 3)
