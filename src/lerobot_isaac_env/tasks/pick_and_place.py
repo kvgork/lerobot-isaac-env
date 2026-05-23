@@ -41,7 +41,7 @@ from lerobot_isaac_env.randomization import (
 # Soft Isaac Lab imports for scene objects and rewards
 # ---------------------------------------------------------------------------
 try:
-    from isaaclab.assets import RigidObjectCfg  # type: ignore[import]
+    from isaaclab.assets import AssetBaseCfg, RigidObjectCfg  # type: ignore[import]
     import isaaclab.sim as sim_utils  # type: ignore[import]
     import isaaclab.envs.mdp as _mdp  # type: ignore[import]
     from isaaclab.managers import RewardTermCfg  # type: ignore[import]
@@ -49,13 +49,14 @@ try:
     _IL_AVAILABLE = True
 except ImportError:
     try:
-        from omni.isaac.lab.assets import RigidObjectCfg  # type: ignore[import]
+        from omni.isaac.lab.assets import AssetBaseCfg, RigidObjectCfg  # type: ignore[import]
         import omni.isaac.lab.sim as sim_utils  # type: ignore[import]
         import omni.isaac.lab.envs.mdp as _mdp  # type: ignore[import]
         from omni.isaac.lab.managers import RewardTermCfg  # type: ignore[import]
 
         _IL_AVAILABLE = True
     except ImportError:
+        AssetBaseCfg = None  # scaffold
         RigidObjectCfg = None  # scaffold
         sim_utils = None  # scaffold
         _mdp = None  # scaffold
@@ -171,39 +172,38 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         rot=(1.0, 0.0, 0.0, 0.0),
                     ),
                 )
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "source_object spawn failed: %s", exc
+                )
 
-            # Add target bin (simplified as a flat kinematic marker).
-            # CuboidCfg alone does NOT apply USD RigidBodyAPI — `RigidObjectCfg`
-            # then errors during init with "Failed to find a rigid body when
-            # resolving '/World/envs/env_.*/TargetBin'". We attach
-            # `rigid_props` (with `kinematic_enabled=True` so it never falls
-            # through the floor), `mass_props`, and `collision_props` so the
-            # spawn produces a proper rigid prim.
+            # Add target bin as a STATIC visual marker (AssetBaseCfg, not
+            # RigidObjectCfg). Isaac Sim 6.0 + PhysX 6.0 hang sim.reset
+            # when a kinematic RigidObjectCfg sources its geometry from
+            # CuboidCfg — `Failed to get a valid attached USD stage id for
+            # kinematic bodies`. AssetBaseCfg + plain CuboidCfg (no
+            # rigid_props, no mass_props, no collision_props) creates a
+            # static prim that PhysX doesn't track, which is fine for a
+            # destination marker (the reward function reads its xy pose
+            # from the cfg, not from the simulator's rigid-body state).
             try:
-                self.scene.target_bin = RigidObjectCfg(
+                self.scene.target_bin = AssetBaseCfg(
                     prim_path="{ENV_REGEX_NS}/TargetBin",
                     spawn=sim_utils.CuboidCfg(
                         size=(0.15, 0.15, 0.02),
-                        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                            kinematic_enabled=True,
-                            disable_gravity=True,
-                        ),
-                        mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
-                        collision_props=sim_utils.CollisionPropertiesCfg(),
-                        # Omit visual_material on Isaac Sim 6.0 — PreviewSurfaceCfg
-                        # routes through CreateShaderPrimFromSdrCommand which
-                        # changed its constructor signature (the `name` kwarg
-                        # is gone). Plain cuboid is fine for a marker.
                     ),
-                    init_state=RigidObjectCfg.InitialStateCfg(
+                    init_state=AssetBaseCfg.InitialStateCfg(
                         pos=(0.5, -0.2, 0.01),
                         rot=(1.0, 0.0, 0.0, 0.0),
                     ),
                 )
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # Don't swallow silently — log so the failure is visible.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "target_bin spawn failed: %s", exc
+                )
 
 
 # ---------------------------------------------------------------------------
