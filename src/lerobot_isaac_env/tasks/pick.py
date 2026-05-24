@@ -137,7 +137,11 @@ class PickEnvCfg(SO101EnvCfg):
             and TerminationTermCfg is not None
             and getattr(self.terminations, "success", None) is not None
         ):
+            # PickEnvCfg adds the entity at scene.target_object (NOT
+            # source_object — that's PickAndPlaceEnvCfg). Override the
+            # base TerminationsCfg.success.params accordingly.
             self.terminations.success.params = {
                 "threshold": 0.04,
                 "lift_threshold": 0.0,
+                "object_name": "target_object",
             }

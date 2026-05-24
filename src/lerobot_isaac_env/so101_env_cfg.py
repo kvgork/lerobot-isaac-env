@@ -396,7 +396,15 @@ class TerminationsCfg:
         default_factory=lambda: (
             TerminationTermCfg(
                 func=success_termination,
-                params={"threshold": 0.05, "lift_threshold": 0.0},
+                # object_name defaults to "source_object" (the entity name in
+                # PickAndPlaceEnvCfg — the sweep target task). PickEnvCfg adds
+                # a scene entity named "target_object" and overrides this in
+                # its own __post_init__.
+                params={
+                    "threshold": 0.05,
+                    "lift_threshold": 0.0,
+                    "object_name": "source_object",
+                },
             )
             if _ISAACLAB_AVAILABLE and mdp is not None and success_termination is not None
             else None

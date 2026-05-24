@@ -50,3 +50,35 @@ def test_pick_env_cfg_terminations_present():
 
     cfg = PickEnvCfg()
     assert cfg.terminations is not None
+
+
+def test_success_termination_object_name_kwarg():
+    """success_termination accepts object_name kwarg; defaults to source_object.
+
+    Required so PickAndPlaceEnvCfg (scene entity 'source_object') doesn't hit
+    KeyError 'object' at the first env.step() — a real bug observed in the
+    2026-05-24 trial 0 sweep crash.
+    """
+    import inspect
+    from lerobot_isaac_env.terminations import success_termination
+
+    sig = inspect.signature(success_termination)
+    assert "object_name" in sig.parameters
+    assert sig.parameters["object_name"].default == "source_object"
+    assert "robot_name" in sig.parameters
+    assert sig.parameters["robot_name"].default == "robot"
+
+
+def test_terminations_cfg_success_default_object_name():
+    """TerminationsCfg.success.params must include object_name='source_object'
+    by default (matches PickAndPlaceEnvCfg's scene entity name)."""
+    from lerobot_isaac_env.so101_env_cfg import TerminationsCfg, _ISAACLAB_AVAILABLE
+
+    if not _ISAACLAB_AVAILABLE:
+        return  # factory returns None without Isaac Lab — skip
+    t = TerminationsCfg()
+    assert t.success is not None
+    params = getattr(t.success, "params", {}) or {}
+    assert params.get("object_name") == "source_object", (
+        f"default object_name must be 'source_object', got {params.get('object_name')!r}"
+    )

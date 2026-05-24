@@ -97,6 +97,8 @@ def success_termination(
     env: ManagerBasedRLEnv,
     threshold: float = 0.05,
     lift_threshold: float = 0.0,
+    object_name: str = "source_object",
+    robot_name: str = "robot",
     robot_cfg: None = None,
     object_cfg: None = None,
 ) -> torch.Tensor:
@@ -120,6 +122,13 @@ def success_termination(
         Minimum object height (Z world coordinate, metres) for success to
         fire.  Default 0.0 disables the lift check — backward-compatible.
         Set to e.g. 0.1 for a 10 cm lift requirement.
+    object_name:
+        Scene entity key for the manipulation object.  ``PickAndPlaceEnvCfg``
+        names it ``source_object``; ``PickEnvCfg`` adds a separate
+        ``target_object``.  Override per-task via the ``params`` field of
+        the wrapping ``TerminationTermCfg``.
+    robot_name:
+        Scene entity key for the robot articulation.  Default ``robot``.
     robot_cfg:
         Not used — kept for future ``SceneEntityCfg`` parametrization.
     object_cfg:
@@ -132,8 +141,8 @@ def success_termination(
     """
     _require_isaaclab()
 
-    robot = env.scene["robot"]
-    obj = env.scene["object"]
+    robot = env.scene[robot_name]
+    obj = env.scene[object_name]
 
     # Use the last body in the articulation as the end-effector
     ee_pos = robot.data.body_pos_w[:, -1, :]  # (N, 3)
