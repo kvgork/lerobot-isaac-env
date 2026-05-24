@@ -173,6 +173,7 @@ def progress_reward(
     distance_scale: float = 1.0,
     robot_cfg: Any = None,
     object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
 ) -> torch.Tensor:
     """Dense distance-shaping reward: negative distance to goal, normalised.
 
@@ -195,11 +196,22 @@ def progress_reward(
         to a SceneEntityCfg("object"). PickAndPlaceEnvCfg passes
         ``SceneEntityCfg("source_object")`` because its task object
         lives at that scene name.
+    ee_body_name:
+        Name of the body to use as the end-effector reference. Default
+        ``gripper_link`` (the EE midpoint). SO-101 articulation order is:
+        base_link, shoulder_link, upper_arm_link, lower_arm_link,
+        wrist_link, **gripper_link**, gripper_frame_link,
+        moving_jaw_so101_v1_link. The previous default of
+        ``body_pos_w[:, -1, :]`` picked the moving jaw, which sits at an
+        extended physical offset (~0.95 m at home pose) — DreamerV3 actor
+        plateaued at that floor, never learning to reach. Tested 2026-05-23
+        (session wm-isaac-20260523-134656).
 
     Returns
     -------
     torch.Tensor
-        Shape ``(num_envs,)`` — typically in ``[-1, 0]``.
+        Shape ``(num_envs,)`` — typically in ``[-1, 0]`` for distances
+        within SO-101 reach (~0.4 m).
     """
     _require_isaaclab()
 
@@ -211,8 +223,30 @@ def progress_reward(
     robot = env.scene[robot_cfg.name]
     obj = env.scene[object_cfg.name]
 
-    ee_pos = robot.data.body_pos_w[:, -1, :]  # last body = end-effector (N, 3)
+    # Resolve named EE body. find_bodies returns (indices, names) — we
+    # take the first index. Falls back to body 0 if the name is missing,
+    # with a warning, so misconfigured cfgs degrade gracefully.
+    try:
+        ee_idx_list, _ = robot.find_bodies(ee_body_name)
+        ee_idx = int(ee_idx_list[0]) if len(ee_idx_list) else 0
+    except Exception:  # noqa: BLE001
+        ee_idx = 0
+
+    ee_pos = robot.data.body_pos_w[:, ee_idx, :]  # (N, 3)
     obj_pos = obj.data.root_pos_w  # (N, 3)
 
     dist = torch.norm(ee_pos - obj_pos, dim=-1)  # (N,)
+
+    # Debug print (env 0 only) — gated by env var so noisy training runs
+    # can opt out: PROGRESS_REWARD_DEBUG=1.
+    import os
+    if os.environ.get("PROGRESS_REWARD_DEBUG"):
+        ep = ee_pos[0].detach().cpu().numpy()
+        op = obj_pos[0].detach().cpu().numpy()
+        print(
+            f"[progress_reward] ee={ep[0]:.3f},{ep[1]:.3f},{ep[2]:.3f} "
+            f"obj={op[0]:.3f},{op[1]:.3f},{op[2]:.3f} dist={dist[0].item():.4f}",
+            flush=True,
+        )
+
     return -dist / distance_scale

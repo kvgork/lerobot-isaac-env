@@ -188,13 +188,25 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                 from lerobot_isaac_env import rewards as _rewards_mod
                 from isaaclab.managers import SceneEntityCfg  # type: ignore[import]
                 if RewardTermCfg is not None and self.rewards is not None:
+                    # weight=10.0 + distance_scale=0.4 (SO-101 reach): a 1 m
+                    # mis-positioning yields per-step reward ≈ -0.21 (after
+                    # Isaac Lab's `weight * dt` scaling at dt=1/120), 25×
+                    # stronger than the original (weight=1.0,
+                    # distance_scale=1.0) → DreamerV3's policy loss can
+                    # actually move the actor instead of treating reward
+                    # as noise. ee_body_name pins the EE midpoint
+                    # explicitly; without it `body_pos_w[:, -1, :]` picked
+                    # the moving jaw at an extended offset (verified
+                    # 2026-05-23 session wm-isaac-20260523-134656 plateau
+                    # at reward -2.37 = ~0.95 m raw dist).
                     self.rewards.progress = RewardTermCfg(
                         func=_rewards_mod.progress_reward,
                         params={
-                            "distance_scale": 1.0,
+                            "distance_scale": 0.4,
                             "object_cfg": SceneEntityCfg("source_object"),
+                            "ee_body_name": "gripper_link",
                         },
-                        weight=1.0,
+                        weight=10.0,
                     )
             except Exception as exc:  # noqa: BLE001
                 import logging
