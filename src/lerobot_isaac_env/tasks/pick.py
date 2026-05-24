@@ -7,7 +7,7 @@ tasks.pick — Stage 1: Pick from a fixed, deterministic object position.
 - All DR events disabled (deterministic for Stage 1).
 - Shorter episode (6 s) — reaching a fixed target is fast.
 - ``target_object`` added to scene as a ``RigidObjectCfg`` (when Isaac Lab present).
-- Success termination: gripper-to-object distance < 0.05 m.
+- Success termination: gripper-to-object distance < 0.04 m (narrowed from 5 cm default).
 
 Registered gym ID: ``Isaac-SO101-Pick-v0``
 
@@ -127,9 +127,17 @@ class PickEnvCfg(SO101EnvCfg):
                 # USD unavailable — scene.target_object stays unset
                 pass
 
-        # Wire success termination measuring gripper-to-object distance
-        if _IL_AVAILABLE and _mdp is not None and TerminationTermCfg is not None:
-            self.terminations = TerminationsCfg.__new__(TerminationsCfg)
-            self.terminations.time_out = SO101TerminationsCfg().timeout  # noqa
-            # Use custom success_termination from terminations.py
-            # (task-level override of base SO101TerminationsCfg)
+        # Tighten success threshold for the close-target Stage 1 task.
+        # Base SO101EnvCfg.__post_init__ already wired self.terminations =
+        # TerminationsCfg() with success + time_out. Here we just narrow
+        # the success threshold to 4 cm (vs 5 cm default) for the static-cube
+        # task.
+        if (
+            _IL_AVAILABLE
+            and TerminationTermCfg is not None
+            and getattr(self.terminations, "success", None) is not None
+        ):
+            self.terminations.success.params = {
+                "threshold": 0.04,
+                "lift_threshold": 0.0,
+            }

@@ -15,7 +15,9 @@ Termination conditions
 
 ``success_termination``:
     Object-to-goal distance < threshold.  True terminal state — episode ends
-    successfully.
+    successfully.  Optional ``lift_threshold`` requires the object to be
+    above a minimum height before the distance gate fires (useful for
+    pick-and-lift tasks).
 
 References
 ----------
@@ -94,6 +96,7 @@ def time_out(env: ManagerBasedRLEnv) -> torch.Tensor:
 def success_termination(
     env: ManagerBasedRLEnv,
     threshold: float = 0.05,
+    lift_threshold: float = 0.0,
     robot_cfg: None = None,
     object_cfg: None = None,
 ) -> torch.Tensor:
@@ -102,6 +105,10 @@ def success_termination(
     Computes end-effector-to-object Euclidean distance and returns True for
     any environment where the distance is below ``threshold``.
 
+    When ``lift_threshold > 0.0``, also requires the object's Z coordinate to
+    exceed ``lift_threshold`` metres — useful for pick-and-lift tasks where
+    the agent must raise the object before the success gate fires.
+
     Parameters
     ----------
     env:
@@ -109,6 +116,10 @@ def success_termination(
     threshold:
         Distance threshold in metres.  Episode terminates (success) when the
         end-effector is within this radius of the target.  Default: 5 cm.
+    lift_threshold:
+        Minimum object height (Z world coordinate, metres) for success to
+        fire.  Default 0.0 disables the lift check — backward-compatible.
+        Set to e.g. 0.1 for a 10 cm lift requirement.
     robot_cfg:
         Not used — kept for future ``SceneEntityCfg`` parametrization.
     object_cfg:
@@ -129,4 +140,7 @@ def success_termination(
     obj_pos = obj.data.root_pos_w  # (N, 3)
 
     dist = torch.norm(ee_pos - obj_pos, dim=-1)  # (N,)
+    if lift_threshold > 0.0:
+        lifted = obj_pos[:, 2] > lift_threshold
+        return (dist < threshold) & lifted
     return dist < threshold

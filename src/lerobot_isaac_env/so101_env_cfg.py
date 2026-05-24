@@ -102,6 +102,14 @@ if TYPE_CHECKING:
     )
     import isaaclab.envs.mdp as mdp  # type: ignore[import]
 
+# ---------------------------------------------------------------------------
+# Soft import of success_termination from terminations.py
+# ---------------------------------------------------------------------------
+try:
+    from .terminations import success_termination  # type: ignore[import]
+except ImportError:
+    success_termination = None  # scaffold
+
 
 # ---------------------------------------------------------------------------
 # Isaac Lab scene config (used when Isaac Lab is installed)
@@ -327,14 +335,27 @@ class RewardsCfg:
     """Reward term manager config.
 
     success_bonus: sparse reward on episode success termination.
+        Default is a wired ``RewardTermCfg`` when Isaac Lab is available,
+        using ``mdp.is_terminated_term`` with ``term_keys=["success"]`` and
+        ``weight=5.0``.  This requires a ``success`` term in
+        ``TerminationsCfg`` — which is now wired by default via the factory
+        below.  Set this field to ``None`` explicitly to disable the bonus.
     action_penalty: L2 action-rate regularisation.
     """
 
-    # success_bonus depends on a `success` termination term existing in
-    # TerminationsCfg. Default TerminationsCfg has only `time_out` →
-    # is_terminated_term raises ValueError "success: []". Tasks that wire
-    # a real success termination set this field themselves; default = None.
-    success_bonus: Any = None
+    # success_bonus: wired sparse bonus when Isaac Lab is present.
+    # Falls back to None in test envs without Isaac Lab — tests pass as-is.
+    success_bonus: Any = field(
+        default_factory=lambda: (
+            RewardTermCfg(
+                func=mdp.is_terminated_term,
+                params={"term_keys": ["success"]},
+                weight=5.0,
+            )
+            if _ISAACLAB_AVAILABLE and mdp is not None
+            else None
+        )
+    )
     action_penalty: Any = field(
         default_factory=lambda: (
             RewardTermCfg(
@@ -357,14 +378,27 @@ class RewardsCfg:
 class TerminationsCfg:
     """Termination manager config.
 
-    time_out is a truncation (not terminal).  Task-specific success
-    terminations are added in task subclasses.
+    time_out is a truncation (not terminal).  success terminates the episode
+    when the end-effector is within ``threshold`` metres of the target object.
+    Both fields are wired by default when Isaac Lab is available; they fall
+    back to None in test envs without Isaac Lab.
     """
 
     time_out: Any = field(
         default_factory=lambda: (
             TerminationTermCfg(func=mdp.time_out, time_out=True)
             if _ISAACLAB_AVAILABLE and mdp is not None
+            else None
+        )
+    )
+
+    success: Any = field(
+        default_factory=lambda: (
+            TerminationTermCfg(
+                func=success_termination,
+                params={"threshold": 0.05, "lift_threshold": 0.0},
+            )
+            if _ISAACLAB_AVAILABLE and mdp is not None and success_termination is not None
             else None
         )
     )
@@ -601,6 +635,12 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
             # PickAndPlaceEnvCfg) may override or extend in their own
             # __post_init__ to add dense shaping like `progress_reward`.
             self.rewards = RewardsCfg()
+
+            # Wire the termination manager with the real TerminationsCfg
+            # (time_out + success). Tasks may narrow the success threshold
+            # by mutating self.terminations.success.params in their own
+            # __post_init__.
+            self.terminations = TerminationsCfg()
 
             # Wire cameras + camera obs terms if enabled.
             if self.enable_cameras:
