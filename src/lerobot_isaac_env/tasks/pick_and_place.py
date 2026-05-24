@@ -25,6 +25,21 @@ References
 
 from __future__ import annotations
 
+import os
+
+# Env-driven knobs for HP sweeps (read once at module load).
+# LEROBOT_ISAAC_PROGRESS_WEIGHT — dense reward weight. 0 disables progress
+#   shaping (sparse-only). Default 10.0 preserves prior behaviour.
+# LEROBOT_ISAAC_OBJECT_X/Y/Z — source_object spawn position. Default
+#   (0.5, 0.1, 0.05). Trial 6 of plans/2026-05-24-wm-isaac-hp-trials-1to9.md
+#   uses (0.30, 0.05, 0.05) for the "object-at-home curriculum".
+_PROGRESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PROGRESS_WEIGHT", "10.0"))
+_OBJECT_POS = (
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_X", "0.5")),
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.1")),
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_Z", "0.05")),
+)
+
 from dataclasses import dataclass
 
 from lerobot_isaac_env.so101_env_cfg import (
@@ -117,6 +132,9 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
     ----------------------------------------
     source_object:
         Object to pick up; placed at nominal position (with DR for stage >= 3).
+        Spawn position controlled by LEROBOT_ISAAC_OBJECT_X/Y/Z env vars
+        (default 0.5, 0.1, 0.05). Use (0.30, 0.05, 0.05) for object-at-home
+        curriculum (trial 6).
     target_bin:
         Target zone/bin; fixed for stages 2–3, randomised ±3 cm for stage 4.
 
@@ -128,6 +146,9 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
         Object placed inside target bin (distance < 0.05 m).
     action_penalty (weight -0.01):
         L2 action-rate regularisation.
+    progress (weight LEROBOT_ISAAC_PROGRESS_WEIGHT, default 10.0):
+        EE-to-object distance shaping. Set LEROBOT_ISAAC_PROGRESS_WEIGHT=0
+        for sparse-only mode (no dense shaping).
 
     Notes
     -----
@@ -156,7 +177,9 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
         self.events = _events_for_stage(self.stage)
 
         if _IL_AVAILABLE and self.scene is not None:
-            # Add source object (the thing to pick)
+            # Add source object (the thing to pick).
+            # Spawn position is controlled by LEROBOT_ISAAC_OBJECT_X/Y/Z env vars
+            # (default 0.5, 0.1, 0.05). Trial 6 uses (0.30, 0.05, 0.05).
             try:
                 self.scene.source_object = RigidObjectCfg(
                     prim_path="{ENV_REGEX_NS}/SourceObject",
@@ -168,7 +191,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         scale=(0.05, 0.05, 0.05),
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
-                        pos=(0.5, 0.1, 0.05),
+                        pos=_OBJECT_POS,  # was (0.5, 0.1, 0.05); now env-var-driven
                         rot=(1.0, 0.0, 0.0, 0.0),
                     ),
                 )
@@ -184,35 +207,44 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
             # accidentally succeeds — sample-inefficient on RTX 3080 budgets.
             # `progress_reward` is exported by lerobot_isaac_env.rewards;
             # weight=1.0 normalises to roughly [-1, 0] per step.
-            try:
-                from lerobot_isaac_env import rewards as _rewards_mod
-                from isaaclab.managers import SceneEntityCfg  # type: ignore[import]
-                if RewardTermCfg is not None and self.rewards is not None:
-                    # weight=10.0 + distance_scale=0.4 (SO-101 reach): a 1 m
-                    # mis-positioning yields per-step reward ≈ -0.21 (after
-                    # Isaac Lab's `weight * dt` scaling at dt=1/120), 25×
-                    # stronger than the original (weight=1.0,
-                    # distance_scale=1.0) → DreamerV3's policy loss can
-                    # actually move the actor instead of treating reward
-                    # as noise. ee_body_name pins the EE midpoint
-                    # explicitly; without it `body_pos_w[:, -1, :]` picked
-                    # the moving jaw at an extended offset (verified
-                    # 2026-05-23 session wm-isaac-20260523-134656 plateau
-                    # at reward -2.37 = ~0.95 m raw dist).
-                    self.rewards.progress = RewardTermCfg(
-                        func=_rewards_mod.progress_reward,
-                        params={
-                            "distance_scale": 0.4,
-                            "object_cfg": SceneEntityCfg("source_object"),
-                            "ee_body_name": "gripper_link",
-                        },
-                        weight=10.0,
+            #
+            # LEROBOT_ISAAC_PROGRESS_WEIGHT=0 disables dense shaping entirely
+            # (sparse-only mode for HP sweep trials 1-4 and 7).
+            if _PROGRESS_WEIGHT > 0.0:
+                try:
+                    from lerobot_isaac_env import rewards as _rewards_mod
+                    from isaaclab.managers import SceneEntityCfg  # type: ignore[import]
+                    if RewardTermCfg is not None and self.rewards is not None:
+                        # weight=10.0 + distance_scale=0.4 (SO-101 reach): a 1 m
+                        # mis-positioning yields per-step reward ≈ -0.21 (after
+                        # Isaac Lab's `weight * dt` scaling at dt=1/120), 25×
+                        # stronger than the original (weight=1.0,
+                        # distance_scale=1.0) → DreamerV3's policy loss can
+                        # actually move the actor instead of treating reward
+                        # as noise. ee_body_name pins the EE midpoint
+                        # explicitly; without it `body_pos_w[:, -1, :]` picked
+                        # the moving jaw at an extended offset (verified
+                        # 2026-05-23 session wm-isaac-20260523-134656 plateau
+                        # at reward -2.37 = ~0.95 m raw dist).
+                        self.rewards.progress = RewardTermCfg(
+                            func=_rewards_mod.progress_reward,
+                            params={
+                                "distance_scale": 0.4,
+                                "object_cfg": SceneEntityCfg("source_object"),
+                                "ee_body_name": "gripper_link",
+                            },
+                            weight=_PROGRESS_WEIGHT,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "progress_reward wiring failed: %s", exc
                     )
-            except Exception as exc:  # noqa: BLE001
-                import logging
-                logging.getLogger(__name__).warning(
-                    "progress_reward wiring failed: %s", exc
-                )
+            else:
+                # Sparse-only mode. Ensure self.rewards.progress stays None so the
+                # reward manager only emits success_bonus.
+                if self.rewards is not None:
+                    self.rewards.progress = None
 
             # Add target bin as a STATIC visual marker (AssetBaseCfg, not
             # RigidObjectCfg). Isaac Sim 6.0 + PhysX 6.0 hang sim.reset
