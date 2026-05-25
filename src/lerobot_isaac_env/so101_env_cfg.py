@@ -26,6 +26,7 @@ References
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -109,6 +110,24 @@ try:
     from .terminations import success_termination  # type: ignore[import]
 except ImportError:
     success_termination = None  # scaffold
+
+# ---------------------------------------------------------------------------
+# Opt-in object_pose actor obs (diagnostic for missing-obs bug, 2026-05-24).
+# Set LEROBOT_ISAAC_INCLUDE_OBJECT_POSE=1 to add object position + quaternion
+# to PolicyObsGroupCfg.  Default OFF so existing consumers keep the 6-dim
+# joint_pos-only obs space unmodified.
+# ---------------------------------------------------------------------------
+_INCLUDE_OBJECT_POSE = os.environ.get("LEROBOT_ISAAC_INCLUDE_OBJECT_POSE", "0") not in (
+    "0",
+    "",
+    "false",
+    "False",
+)
+
+try:
+    from .observations import object_pose as _object_pose_fn  # type: ignore[import]
+except ImportError:
+    _object_pose_fn = None  # scaffold
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +303,13 @@ class PolicyObsGroupCfg(ObservationGroupCfg):
 
     Camera obs terms (wrist_camera, overhead_camera) are added in
     SO101EnvCfg.__post_init__ when ``enable_cameras=True``.
+
+    Opt-in: set ``LEROBOT_ISAAC_INCLUDE_OBJECT_POSE=1`` before import to also
+    include ``object_pose`` (pos[3] + quat[4]) as a 7-dim proprioceptive term.
+    This gives the actor direct access to the object location — useful as a
+    diagnostic when cameras are disabled and the actor collapses
+    (Grads/actor → 0). Off by default so existing consumers keep the
+    6-dim joint_pos-only obs space.
     """
 
     joint_pos: Any = field(
@@ -304,6 +330,22 @@ class PolicyObsGroupCfg(ObservationGroupCfg):
         default_factory=lambda: (
             ObservationTermCfg(func=mdp.last_action)
             if _ISAACLAB_AVAILABLE and mdp is not None
+            else None
+        )
+    )
+
+    # Object pose (privileged proprioception). Opt-in via env var
+    # LEROBOT_ISAAC_INCLUDE_OBJECT_POSE=1. Diagnostic for the missing-obs
+    # bug observed in the 2026-05-24 sweep: actor cannot learn to reach if
+    # it has no information about object position. Default = off so existing
+    # consumers (LoRA / BC trainers) keep the 6-dim joint_pos-only obs.
+    object_pose: Any = field(
+        default_factory=lambda: (
+            ObservationTermCfg(
+                func=_object_pose_fn,
+                params={"object_name": "source_object"},
+            )
+            if (_ISAACLAB_AVAILABLE and _object_pose_fn is not None and _INCLUDE_OBJECT_POSE)
             else None
         )
     )

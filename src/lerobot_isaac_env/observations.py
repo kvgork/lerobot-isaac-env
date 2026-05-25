@@ -140,67 +140,140 @@ def last_action(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
-# Camera observation stubs — deferred to Stage with CameraCfg wiring
+# Camera observation term functions (Bundle C.1 — landed 2026-05-21)
 # ---------------------------------------------------------------------------
+#
+# These read the RGB output buffer of a Camera sensor in the scene and return
+# it as a torch.Tensor in (N, C, H, W) channel-first layout, matching
+# LeRobotDataset v3.0 image convention.
+#
+# Prerequisites:
+#   - SO101SceneCfg must declare ``wrist_camera`` and ``overhead_camera`` via
+#     ``CameraCfg(prim_path=..., spawn=PinholeCameraCfg(...), data_types=["rgb"])``.
+#   - AppLauncher MUST be initialised with ``enable_cameras=True``.
+#   - For headless GPU rendering on RTX 3080, ensure the 30-frame texture
+#     warm-up runs before the first observation read (see
+#     ``warmup.warmup_textures`` in this package — IsaacLab#3250).
+#
+# The functions raise ImportError if Isaac Lab is missing and KeyError if
+# the camera prims are absent from the scene (e.g. running with cameras off).
 
 
-def wrist_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Return the wrist camera RGB frame.
+def _camera_rgb(env: ManagerBasedRLEnv, camera_key: str) -> torch.Tensor:
+    """Internal helper — read RGB from a named Camera sensor and convert to
+    channel-first uint8 tensor (N, 3, H, W).
 
-    .. note::
-        **Stub — not yet implemented.**
-        Camera observations require ``CameraCfg`` to be added to the scene
-        config (``SO101SceneCfg``) and a RGB sensor to be wired in.
-        See Isaac Lab tutorial 04:
-        https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/
+    Parameters
+    ----------
+    env : ManagerBasedRLEnv
+        Isaac Lab manager-based env.
+    camera_key : str
+        Scene key for the Camera sensor (e.g. ``"wrist_camera"``).
 
     Returns
     -------
     torch.Tensor
-        Shape ``(num_envs, H, W, 3)`` uint8 when implemented.
+        Shape ``(num_envs, 3, H, W)``, dtype ``uint8``.
 
     Raises
     ------
-    NotImplementedError
-        Always — camera obs requires CameraCfg + RGB sensor wired in scene.
+    ImportError
+        Isaac Lab not installed.
+    KeyError
+        Named camera not in scene (cameras disabled or misconfigured).
     """
-    raise NotImplementedError(
-        "Camera obs requires CameraCfg + RGB sensor wired in scene; "
-        "see Isaac Lab tutorial 04: "
-        "https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/"
-    )
+    if not _ISAACLAB_AVAILABLE:
+        raise ImportError(
+            "Isaac Lab is required for camera observations. "
+            "Install Isaac Lab via scripts/install_isaac_lab.sh and run with "
+            "AppLauncher(enable_cameras=True)."
+        )
+    # Check scene membership BEFORE torch — gives a clearer error when the
+    # user has Isaac Lab but didn't enable cameras in the env cfg.
+    if camera_key not in env.scene.keys():
+        raise KeyError(
+            f"Camera '{camera_key}' not in scene. Either add it via "
+            f"SO101SceneCfg.{camera_key} = CameraCfg(...) or skip camera obs "
+            f"by removing the term from ObservationsCfg."
+        )
+    if torch is None:  # pragma: no cover - torch is a hard dep in practice
+        raise ImportError("torch is required for camera observations.")
+
+    cam = env.scene[camera_key]
+    # Isaac Lab Camera.data.output["rgb"] is (N, H, W, 3) uint8 / uint16.
+    rgb_hwc = cam.data.output["rgb"]  # type: ignore[index]
+    # Channel-first for downstream policies (LeRobotDataset v3 convention).
+    # permute returns a view; .contiguous() is free if memory is already aligned.
+    return rgb_hwc.permute(0, 3, 1, 2).contiguous()
+
+
+def wrist_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Return the wrist-mounted camera RGB frame.
+
+    Reads ``env.scene['wrist_camera'].data.output['rgb']`` and converts to
+    channel-first ``(num_envs, 3, H, W)`` uint8 — matching the LeRobotDataset
+    v3 ``observation.images.wrist`` column convention.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_envs, 3, H, W)``, dtype ``uint8``.
+
+    Raises
+    ------
+    ImportError
+        If Isaac Lab / torch are not installed.
+    KeyError
+        If ``wrist_camera`` is missing from the scene (cameras off).
+    """
+    return _camera_rgb(env, "wrist_camera")
 
 
 def overhead_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return the overhead (bird's-eye) camera RGB frame.
 
-    .. note::
-        **Stub — not yet implemented.**
-        Same pattern as ``wrist_camera_rgb``.  Add overhead ``CameraCfg``
-        to scene and read from ``env.scene['overhead_cam'].data.output['rgb']``.
+    Reads ``env.scene['overhead_camera'].data.output['rgb']`` and converts to
+    channel-first ``(num_envs, 3, H, W)`` uint8 — matching the LeRobotDataset
+    v3 ``observation.images.overhead`` column convention.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_envs, 3, H, W)``, dtype ``uint8``.
 
     Raises
     ------
-    NotImplementedError
-        Always — camera obs requires CameraCfg + RGB sensor wired in scene.
+    ImportError
+        If Isaac Lab / torch are not installed.
+    KeyError
+        If ``overhead_camera`` is missing from the scene (cameras off).
     """
-    raise NotImplementedError(
-        "Camera obs requires CameraCfg + RGB sensor wired in scene; "
-        "see Isaac Lab tutorial 04: "
-        "https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/"
-    )
+    return _camera_rgb(env, "overhead_camera")
 
 
-def object_pose(env: ManagerBasedRLEnv) -> torch.Tensor:
+def object_pose(
+    env: ManagerBasedRLEnv,
+    object_name: str = "source_object",
+) -> torch.Tensor:
     """Return the 6-DoF pose of the manipulation target object.
 
-    Privileged observation (available to critic, not policy).  Uses
-    ``env.scene['object'].data.root_pos_w`` and ``root_quat_w``.
+    Privileged observation — historically critic-only, but can be promoted
+    to the actor's ``PolicyObsGroupCfg`` for diagnostic runs when the actor
+    has no other object-location signal (e.g., cameras disabled). Opt-in via
+    env var ``LEROBOT_ISAAC_INCLUDE_OBJECT_POSE=1``.
+
+    The ``object_name`` parameter mirrors the pattern introduced for
+    ``success_termination`` (commit 811c2e2): ``PickAndPlaceEnvCfg`` uses
+    ``'source_object'`` (default), while ``PickEnvCfg`` uses
+    ``'target_object'``. Override via ``ObservationTermCfg.params``.
 
     Parameters
     ----------
     env:
         Isaac Lab ``ManagerBasedRLEnv`` instance.
+    object_name:
+        Key into ``env.scene`` that identifies the manipulation target.
+        Default is ``'source_object'`` (``PickAndPlaceEnvCfg``).
 
     Returns
     -------
@@ -212,12 +285,12 @@ def object_pose(env: ManagerBasedRLEnv) -> torch.Tensor:
     ImportError
         If Isaac Lab is not installed.
     KeyError
-        If ``object`` is not in the scene (task-specific, not in base env).
+        If *object_name* is not present in the scene.
     """
     if not _ISAACLAB_AVAILABLE:
         raise ImportError("Isaac Lab is required for object_pose observation.")
 
-    obj = env.scene["object"]
+    obj = env.scene[object_name]
     pos = obj.data.root_pos_w  # (num_envs, 3)
     quat = obj.data.root_quat_w  # (num_envs, 4)
     return torch.cat([pos, quat], dim=-1)
