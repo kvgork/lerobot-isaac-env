@@ -31,3 +31,7 @@ so101_converted/
 # Regenerate if needed: pixi run -e sim python scripts/_convert_so101_urdf.py \
 #   --input /tmp/so-arm100/Simulation/SO101/so101_new_calib.urdf \
 #   --output src/lerobot-isaac-env/assets/usd/so101.usd
+
+# Legacy stale Payload/ dir from pre-2026-05-25 USD conversion. Real USD payload
+# now lives at so101_new_calib/payloads/.
+/Payload/

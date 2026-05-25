@@ -196,11 +196,21 @@ def build_articulation_cfg(
         actuators={
             # Single actuator group covering all joints with a regex wildcard.
             # Stiffness/damping tuned for Feetech STS3215 servo-class hardware.
-            # Refine via system-identification experiments post-install.
+            #
+            # CRITICAL: effort_limit + velocity_limit MUST be set explicitly.
+            # When unset, Isaac Lab reads them from the USD; URDF→USD converter
+            # leaves them as 0 → max applied torque/velocity is 0 → arm frozen
+            # regardless of stiffness/damping. Scripted-arm audit (2026-05-25)
+            # showed jp_delta=[0,0,0,0,0,0] for ALL actions until this fix.
+            #
+            # Feetech STS3215 specs: stall torque ~6 N·m, no-load speed ~7 rad/s.
+            # 10 N·m + 10 rad/s are safe margins so motion never saturates.
             "so101_arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
                 stiffness=80.0,
                 damping=4.0,
+                effort_limit=10.0,
+                velocity_limit=10.0,
             ),
         },
     )
