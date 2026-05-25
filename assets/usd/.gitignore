@@ -1,11 +1,33 @@
-# USD binary and text files — not vendored in git.
-# Obtain via assets/usd/download_so101_urdf.sh + convert_urdf.
-*.usd
-*.usda
-*.usdc
-*.usdz
-
-# Mesh files fetched by download script (also not vendored)
+# Mesh files fetched by download script (not vendored — too large)
 *.stl
 *.obj
 *.dae
+
+# USD binary files (not vendored — regenerate with scripts/_convert_so101_urdf.py)
+# Binary .usd/.usdc/.usdz are large; only text .usda files are vendored.
+*.usdc
+*.usdz
+
+# The large geometry binary (5.6 MB) is excluded; regenerate from URDF.
+so101_new_calib/payloads/geometries.usd
+
+# Texture images (generated from URDF mesh assets)
+so101_new_calib/Textures/
+
+# Intermediate conversion artifacts (kept out of repo)
+usdex/
+temp/
+
+# Backup files
+*.bak.*
+
+# Legacy converted directories (old conversion attempts, not used)
+so101_converted/
+
+# Legacy flat usda at top level of assets/usd/ (old conversion output)
+/so101_new_calib.usda
+
+# USD text files (.usda) ARE vendored — they contain Physics schema definitions.
+# Regenerate if needed: pixi run -e sim python scripts/_convert_so101_urdf.py \
+#   --input /tmp/so-arm100/Simulation/SO101/so101_new_calib.urdf \
+#   --output src/lerobot-isaac-env/assets/usd/so101.usd
