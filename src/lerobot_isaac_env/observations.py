@@ -10,19 +10,13 @@ wrappers around Isaac Lab's built-in ``mdp`` helpers, kept here so that
 ``ObservationTermCfg(func=observations.joint_pos)`` works as an alternative
 to referencing ``mdp`` functions directly.
 
-Camera observation functions remain **stubbed** — they raise
-``NotImplementedError`` because wiring camera sensors requires ``CameraCfg``
-to be added to the scene config first.  See the TODO comments and the Isaac
-Lab sensor tutorial (tutorial 04) for instructions.
-
 Column naming convention
 ------------------------
 Names mirror ``LeRobotDataset`` v3.0 so that policies trained on real teleop
 data can run in sim and synthetic rollouts merge without schema transforms:
 
-    ``observation.state``           — joint_pos + joint_vel concatenated
-    ``observation.images.wrist``    — wrist RGB frame
-    ``observation.images.overhead`` — overhead RGB frame
+    ``observation.state``             — joint_pos (6-dim, matches real dataset)
+    ``observation.images.d435_rgb``   — wrist-mounted D435 RGB frame (3, 480, 640)
 
 References
 ----------
@@ -112,7 +106,8 @@ def joint_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     Notes
     -----
-    LeRobot column: ``observation.state[6:12]`` (concatenated with joint_pos).
+    LeRobot column: privileged obs only (joint_vel NOT in real dataset schema).
+    Move to PrivilegedObsGroupCfg if policy must match real (6,) state dim.
     """
     if not _ISAACLAB_AVAILABLE or _mdp is None:
         raise ImportError("Isaac Lab is required to run observation term functions.")
@@ -140,47 +135,52 @@ def last_action(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
-# Camera observation term functions (Bundle C.1 — landed 2026-05-21)
+# Camera observation term functions (DR100 Phase 1 — 2026-05-26)
 # ---------------------------------------------------------------------------
 #
-# These read the RGB output buffer of a Camera sensor in the scene and return
-# it as a torch.Tensor in (N, C, H, W) channel-first layout, matching
-# LeRobotDataset v3.0 image convention.
+# Wrist-mounted Intel RealSense D435 camera.  Matches the real SO-101 teleop
+# dataset schema: ``observation.images.d435_rgb``, shape (3, 480, 640) uint8.
 #
 # Prerequisites:
-#   - SO101SceneCfg must declare ``wrist_camera`` and ``overhead_camera`` via
-#     ``CameraCfg(prim_path=..., spawn=PinholeCameraCfg(...), data_types=["rgb"])``.
+#   - SO101SceneCfg must declare ``d435_camera`` via CameraCfg parented to
+#     ``{ENV_REGEX_NS}/Robot/base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link/d435``.
 #   - AppLauncher MUST be initialised with ``enable_cameras=True``.
 #   - For headless GPU rendering on RTX 3080, ensure the 30-frame texture
 #     warm-up runs before the first observation read (see
 #     ``warmup.warmup_textures`` in this package — IsaacLab#3250).
 #
-# The functions raise ImportError if Isaac Lab is missing and KeyError if
-# the camera prims are absent from the scene (e.g. running with cameras off).
+# The function raises ImportError if Isaac Lab is missing and KeyError if
+# the camera prim is absent from the scene (e.g. running with cameras off).
 
 
-def _camera_rgb(env: ManagerBasedRLEnv, camera_key: str) -> torch.Tensor:
-    """Internal helper — read RGB from a named Camera sensor and convert to
-    channel-first uint8 tensor (N, 3, H, W).
+def d435_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Return the wrist-mounted D435 camera RGB frame.
 
-    Parameters
-    ----------
-    env : ManagerBasedRLEnv
-        Isaac Lab manager-based env.
-    camera_key : str
-        Scene key for the Camera sensor (e.g. ``"wrist_camera"``).
+    Reads ``env.scene['d435_camera'].data.output['rgb']`` — shape
+    ``(num_envs, 480, 640, 3)`` uint8 from Isaac Lab — and permutes to
+    channel-first ``(num_envs, 3, 480, 640)`` to match:
+
+    - ``LeRobotDataset`` v3.0 ``observation.images.d435_rgb`` column
+      (``names: [channels, height, width]``)
+    - Real SO-101 teleop dataset ``meta/info.json`` shape ``(3, 480, 640)``
+
+    Camera spec: Intel RealSense D435, ~69° H-FOV at 640×480.
+    Prim path: ``{ENV_REGEX_NS}/Robot/base_link/shoulder_link/upper_arm_link/
+    lower_arm_link/wrist_link/d435``
+    (confirmed against ``assets/usd/Payload/Physics.usda`` hierarchy).
 
     Returns
     -------
     torch.Tensor
-        Shape ``(num_envs, 3, H, W)``, dtype ``uint8``.
+        Shape ``(num_envs, 3, 480, 640)``, dtype ``uint8``.
 
     Raises
     ------
     ImportError
-        Isaac Lab not installed.
+        If Isaac Lab / torch are not installed.
     KeyError
-        Named camera not in scene (cameras disabled or misconfigured).
+        If ``d435_camera`` is missing from the scene (cameras disabled or
+        ``SO101EnvCfg.enable_cameras=False``).
     """
     if not _ISAACLAB_AVAILABLE:
         raise ImportError(
@@ -190,65 +190,20 @@ def _camera_rgb(env: ManagerBasedRLEnv, camera_key: str) -> torch.Tensor:
         )
     # Check scene membership BEFORE torch — gives a clearer error when the
     # user has Isaac Lab but didn't enable cameras in the env cfg.
-    if camera_key not in env.scene.keys():
+    if "d435_camera" not in env.scene.keys():
         raise KeyError(
-            f"Camera '{camera_key}' not in scene. Either add it via "
-            f"SO101SceneCfg.{camera_key} = CameraCfg(...) or skip camera obs "
-            f"by removing the term from ObservationsCfg."
+            "Camera 'd435_camera' not in scene. Either set "
+            "SO101EnvCfg.enable_cameras=True or add "
+            "SO101SceneCfg.d435_camera = CameraCfg(...) manually."
         )
     if torch is None:  # pragma: no cover - torch is a hard dep in practice
         raise ImportError("torch is required for camera observations.")
 
-    cam = env.scene[camera_key]
-    # Isaac Lab Camera.data.output["rgb"] is (N, H, W, 3) uint8 / uint16.
+    cam = env.scene["d435_camera"]
+    # Isaac Lab Camera.data.output["rgb"] is (N, H, W, 3) uint8.
     rgb_hwc = cam.data.output["rgb"]  # type: ignore[index]
-    # Channel-first for downstream policies (LeRobotDataset v3 convention).
-    # permute returns a view; .contiguous() is free if memory is already aligned.
+    # Permute to channel-first (N, 3, H, W) — LeRobotDataset v3 convention.
     return rgb_hwc.permute(0, 3, 1, 2).contiguous()
-
-
-def wrist_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Return the wrist-mounted camera RGB frame.
-
-    Reads ``env.scene['wrist_camera'].data.output['rgb']`` and converts to
-    channel-first ``(num_envs, 3, H, W)`` uint8 — matching the LeRobotDataset
-    v3 ``observation.images.wrist`` column convention.
-
-    Returns
-    -------
-    torch.Tensor
-        Shape ``(num_envs, 3, H, W)``, dtype ``uint8``.
-
-    Raises
-    ------
-    ImportError
-        If Isaac Lab / torch are not installed.
-    KeyError
-        If ``wrist_camera`` is missing from the scene (cameras off).
-    """
-    return _camera_rgb(env, "wrist_camera")
-
-
-def overhead_camera_rgb(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Return the overhead (bird's-eye) camera RGB frame.
-
-    Reads ``env.scene['overhead_camera'].data.output['rgb']`` and converts to
-    channel-first ``(num_envs, 3, H, W)`` uint8 — matching the LeRobotDataset
-    v3 ``observation.images.overhead`` column convention.
-
-    Returns
-    -------
-    torch.Tensor
-        Shape ``(num_envs, 3, H, W)``, dtype ``uint8``.
-
-    Raises
-    ------
-    ImportError
-        If Isaac Lab / torch are not installed.
-    KeyError
-        If ``overhead_camera`` is missing from the scene (cameras off).
-    """
-    return _camera_rgb(env, "overhead_camera")
 
 
 def object_pose(

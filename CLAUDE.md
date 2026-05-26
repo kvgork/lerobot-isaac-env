@@ -2,7 +2,7 @@
 
 **Package:** `lerobot-isaac-env` v0.1.0
 **Role:** Isaac Lab Manager-Based RL environment for SO-101 manipulation arm
-**Status:** Scaffolded — stubs only for cameras and insertion task; Isaac Lab integration deferred until runtime
+**Status:** DR100 Phase 1 complete — D435 camera obs wired (2026-05-26)
 
 ---
 
@@ -32,8 +32,28 @@ Observation term functions (in `observations.py`, all require Isaac Lab at call 
 - `joint_vel(env)` — wraps `mdp.joint_vel_rel`; shape (num_envs, 6)
 - `last_action(env)` — wraps `mdp.last_action`; shape (num_envs, 6)
 - `object_pose(env)` — pos (3) + quat (4) of manipulation object; privileged
-- `wrist_camera_rgb(env)` — **stub**, `NotImplementedError`; see plan §CameraCfg
-- `overhead_camera_rgb(env)` — **stub**, `NotImplementedError`
+- `d435_rgb(env)` — wrist-mounted D435 RGB; shape **(num_envs, 3, 480, 640)** uint8; matches real dataset `observation.images.d435_rgb`
+
+**Removed (DR100 Phase 1):** `wrist_camera_rgb` and `overhead_camera_rgb` replaced by `d435_rgb`.
+
+---
+
+## Camera: D435 Wrist Mount (DR100 Phase 1)
+
+| Property | Value |
+|----------|-------|
+| Scene key | `d435_camera` |
+| Obs term | `d435_rgb` |
+| Output shape | `(num_envs, 3, 480, 640)` uint8 |
+| LeRobot column | `observation.images.d435_rgb` |
+| H-FOV | ~69.4° (`2·atan(2.8/4.0)·180/π`) — within 1° of real D435 |
+| Update rate | 30 Hz (1/30 s period) |
+| Prim path | `{ENV_REGEX_NS}/Robot/base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link/d435` |
+| Prim source | Confirmed from `assets/usd/Payload/Physics.usda` |
+
+Enable via `SO101EnvCfg(enable_cameras=True)` + `AppLauncher(enable_cameras=True)`.
+
+**TODO (pose calibration):** Render one sim frame, compare to `datasets/kvgork/so101-pickplace1/data/chunk-000/file-000.parquet` row 0. Gripper jaws should appear in same image region. Tune prim offset (rotation/translation) if misaligned. See plan §Phase 1 "Camera pose calibration".
 
 ---
 
@@ -43,7 +63,7 @@ Observation term functions (in `observations.py`, all require Isaac Lab at call 
 |------|------|
 | `so101_env_cfg.py` | `ManagerBasedRLEnvCfg` subclass; all MDP managers wired; `__post_init__` wires Isaac Lab configs |
 | `so101_articulation.py` | `ArticulationCfg` factory; `SO101_JOINT_NAMES`; `resolve_usd_path()` |
-| `observations.py` | Obs term functions; camera stubs documented with `NotImplementedError` |
+| `observations.py` | Obs term functions; `d435_rgb` wired (DR100 Phase 1) |
 | `actions.py` | `JointPositionActionCfg` stub (6-DOF) |
 | `rewards.py` | `success_reward`, `progress_reward` term functions |
 | `terminations.py` | `success_termination`, `timeout` |
@@ -101,11 +121,15 @@ Both `isaaclab` (new namespace) and `omni.isaac.lab` (legacy namespace) are trie
 2. Add `ObservationTermCfg(func=observations.my_term)` to `PolicyObsGroupCfg` in
    `so101_env_cfg.py`.
 
-### Enable camera observations
+### Enable camera observations (D435 wrist cam)
 
-1. Add `CameraCfg` to `SO101SceneCfg` in `so101_env_cfg.py`.
-2. Implement `wrist_camera_rgb` and `overhead_camera_rgb` in `observations.py`.
-3. See Isaac Lab tutorial 04: https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/
+```python
+cfg = SO101EnvCfg(enable_cameras=True)
+# AppLauncher must also be launched with enable_cameras=True
+```
+
+Camera prim path auto-wired to `wrist_link/d435` (confirmed from USD hierarchy).
+See Isaac Lab tutorial 04: https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/
 
 ---
 
@@ -115,6 +139,7 @@ Tests in `tests/`:
 - `test_imports.py` — smoke test: `import lerobot_isaac_env` without Isaac Lab
 - `test_env_cfg.py` — `SO101EnvCfg()` construction, field defaults, override
 - `test_tasks.py` — `PickEnvCfg` / `PickAndPlaceEnvCfg` construction
+- `test_camera_obs.py` — D435 obs: import check, error paths, channel-first shape, field presence
 
 All tests pass without Isaac Lab. Tests requiring Isaac Lab are marked:
 ```python
@@ -136,6 +161,7 @@ See `../../docs/ARCHITECTURE.md` (spinout section).
 
 ## Source-of-Truth Pointers
 
-- Build plan: `${CLAUDE_CODE_ROOT}/plans/2026-05-06-lerobot-isaac-workspace-plan.md` — Phase 1
+- Build plan (DR100): `plans/2026-05-17-path-a-dr100.md` — Phase 1
+- Build plan (original): `${CLAUDE_CODE_ROOT}/plans/2026-05-06-lerobot-isaac-workspace-plan.md` — Phase 1
 - Component doc: `../../docs/components/isaac_env.md`
 - Isaac Lab Manager API: https://isaac-sim.github.io/IsaacLab/source/api/lab/isaaclab.envs.html

@@ -144,8 +144,7 @@ class SO101SceneCfg(InteractiveSceneCfg):
     - ``robot``: SO-101 articulation (populated in SO101EnvCfg.__post_init__).
     - ``ground``: Flat ground plane.
     - ``dome_light``: Uniform dome light.
-    - ``wrist_camera``: Wrist-mounted RGB camera (None unless cameras enabled).
-    - ``overhead_camera``: Overhead bird's-eye RGB camera (None unless enabled).
+    - ``d435_camera``: Wrist-mounted D435 RGB camera (None unless cameras enabled).
 
     Cameras are populated in ``SO101EnvCfg.__post_init__`` when
     ``enable_cameras=True``. The default config does NOT instantiate cameras
@@ -181,84 +180,58 @@ class SO101SceneCfg(InteractiveSceneCfg):
         )
     )
 
-    # Cameras (Bundle C.1) — populated by SO101EnvCfg.__post_init__ when
-    # SO101EnvCfg.enable_cameras=True. Default: None (cameras off).
-    wrist_camera: Any = None
-    overhead_camera: Any = None
+    # D435 wrist camera (DR100 Phase 1) — populated by SO101EnvCfg.__post_init__
+    # when SO101EnvCfg.enable_cameras=True. Default: None (cameras off).
+    # Prim path: {ENV_REGEX_NS}/Robot/base_link/shoulder_link/upper_arm_link/
+    #            lower_arm_link/wrist_link/d435
+    # (confirmed from assets/usd/Payload/Physics.usda hierarchy)
+    d435_camera: Any = None
 
 
 # ---------------------------------------------------------------------------
-# Camera factory helpers (Bundle C.1)
+# Camera factory helpers (DR100 Phase 1)
 # ---------------------------------------------------------------------------
 
 
-def _make_wrist_camera_cfg(
-    resolution: tuple[int, int] = (128, 128),
+def _make_d435_camera_cfg(
     update_period: float = 1 / 30,
 ) -> Any:
-    """Build a CameraCfg for the wrist-mounted RGB camera.
+    """Build a CameraCfg for the wrist-mounted D435 RGB camera.
 
-    Mount point: attached to the gripper / end-effector frame via the
-    ``{ENV_REGEX_NS}/Robot/.../wrist_camera_mount`` prim. Pose offset is small
-    forward-and-down so the camera looks at the gripper tip.
+    Matches the real SO-101 dataset schema:
+    - ``observation.images.d435_rgb``, shape ``(3, 480, 640)``, dtype image (PNG)
+    - Intel RealSense D435: ~69° H-FOV at 640×480
+
+    FOV calculation: ``2·atan(horizontal_aperture / (2·focal_length))·180/π``
+    With ``horizontal_aperture=2.8, focal_length=2.0``:
+    ``2·atan(2.8/4.0)·180/π = 69.4°`` — within 1° of real D435.
+
+    Prim path parent: wrist_link confirmed from USD hierarchy:
+    ``base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link``
+    (see ``assets/usd/Payload/Physics.usda``).
 
     Parameters
     ----------
-    resolution : (width, height)
-        Default 128x128 to fit RTX 3080 10 GB at 2 cameras. Scale to 256x256
-        when GPU budget allows.
     update_period : float
         Camera tick period in seconds. 1/30 = 30 Hz, matching policy rate.
     """
-    if not (_ISAACLAB_AVAILABLE and CameraCfg is not None and PinholeCameraCfg is not None):
+    if not (_ISAACLAB_AVAILABLE and CameraCfg is not None and sim_utils is not None):
         return None
     return CameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/wrist_camera",
+        prim_path=(
+            "{ENV_REGEX_NS}/Robot"
+            "/base_link/shoulder_link/upper_arm_link/lower_arm_link"
+            "/wrist_link/d435"
+        ),
         update_period=update_period,
-        height=resolution[1],
-        width=resolution[0],
+        height=480,
+        width=640,
         data_types=["rgb"],
-        spawn=PinholeCameraCfg(
-            focal_length=12.0,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=2.0,
             focus_distance=400.0,
-            horizontal_aperture=20.955,
-            clipping_range=(0.01, 1.5),
-        ),
-        offset=CameraCfg.OffsetCfg(  # type: ignore[attr-defined]
-            pos=(0.05, 0.0, 0.02),
-            rot=(0.7071, 0.0, 0.7071, 0.0),  # face forward + slightly down
-            convention="ros",
-        ),
-    )
-
-
-def _make_overhead_camera_cfg(
-    resolution: tuple[int, int] = (128, 128),
-    update_period: float = 1 / 30,
-) -> Any:
-    """Build a CameraCfg for the overhead (bird's-eye) RGB camera.
-
-    Mounted ~0.8 m above the workspace pointing straight down. Provides a
-    static viewpoint of the table/workspace independent of arm motion.
-    """
-    if not (_ISAACLAB_AVAILABLE and CameraCfg is not None and PinholeCameraCfg is not None):
-        return None
-    return CameraCfg(
-        prim_path="{ENV_REGEX_NS}/overhead_camera",
-        update_period=update_period,
-        height=resolution[1],
-        width=resolution[0],
-        data_types=["rgb"],
-        spawn=PinholeCameraCfg(
-            focal_length=24.0,
-            focus_distance=800.0,
-            horizontal_aperture=20.955,
-            clipping_range=(0.05, 2.0),
-        ),
-        offset=CameraCfg.OffsetCfg(  # type: ignore[attr-defined]
-            pos=(0.4, 0.0, 0.8),
-            rot=(0.0, 0.7071, 0.0, 0.7071),  # face straight down
-            convention="ros",
+            horizontal_aperture=2.8,
+            clipping_range=(0.05, 5.0),
         ),
     )
 
@@ -299,10 +272,10 @@ class ActionsCfg:
 @configclass
 @dataclass
 class PolicyObsGroupCfg(ObservationGroupCfg):
-    """Policy observation group: joint_pos_rel, joint_vel_rel, last_action.
+    """Policy observation group: joint_pos_rel, last_action, d435_rgb.
 
-    Camera obs terms (wrist_camera, overhead_camera) are added in
-    SO101EnvCfg.__post_init__ when ``enable_cameras=True``.
+    The d435_rgb camera obs term is added in SO101EnvCfg.__post_init__ when
+    ``enable_cameras=True``.
 
     Opt-in: set ``LEROBOT_ISAAC_INCLUDE_OBJECT_POSE=1`` before import to also
     include ``object_pose`` (pos[3] + quat[4]) as a 7-dim proprioceptive term.
@@ -310,6 +283,11 @@ class PolicyObsGroupCfg(ObservationGroupCfg):
     diagnostic when cameras are disabled and the actor collapses
     (Grads/actor → 0). Off by default so existing consumers keep the
     6-dim joint_pos-only obs space.
+
+    Note on joint_vel: the real SO-101 dataset stores only 6-dim joint_pos in
+    ``observation.state``. joint_vel is kept here for sim-internal use; move to
+    a PrivilegedObsGroupCfg if training a policy directly on sim observations
+    that must match the real (6,) state dimension (see plan §Phase 2, Q2).
     """
 
     joint_pos: Any = field(
@@ -350,12 +328,11 @@ class PolicyObsGroupCfg(ObservationGroupCfg):
         )
     )
 
-    # Camera obs — None unless enabled. Populated in SO101EnvCfg.__post_init__
-    # via _wire_camera_obs_terms(). LeRobotDataset v3 column names:
-    #   wrist_camera_rgb     → observation.images.wrist
-    #   overhead_camera_rgb  → observation.images.overhead
-    wrist_camera_rgb: Any = None
-    overhead_camera_rgb: Any = None
+    # D435 wrist camera obs (DR100 Phase 1). None unless cameras enabled.
+    # Populated in SO101EnvCfg.__post_init__ via _wire_cameras().
+    # LeRobotDataset v3 column: observation.images.d435_rgb
+    # Shape: (num_envs, 3, 480, 640) uint8 — matches real dataset schema.
+    d435_rgb: Any = None
 
 
 @configclass
@@ -560,15 +537,14 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
         when Isaac Lab is available.
     scene : SO101SceneCfg | None
         Scene with robot articulation, ground plane, dome light, and
-        (optionally) wrist + overhead cameras.
+        (optionally) D435 wrist camera.
     enable_cameras : bool
-        If True, populates ``scene.wrist_camera`` + ``scene.overhead_camera``
-        with default CameraCfgs and wires obs terms. Requires
-        ``AppLauncher(enable_cameras=True)`` at the app level.
+        If True, populates ``scene.d435_camera`` with D435 CameraCfg and wires
+        the ``d435_rgb`` obs term. Requires ``AppLauncher(enable_cameras=True)``
+        at the app level.
     camera_resolution : tuple[int, int]
-        (width, height) for both cameras. Default 128×128 fits RTX 3080 10 GB
-        comfortably for 2 cameras + single env. Scale to 256×256 when budget
-        allows; benchmark before going higher.
+        Not used for D435 (fixed at 640×480 to match real dataset).
+        Kept for backward compatibility with existing tests.
 
     The ``observations``, ``actions``, ``rewards``, ``terminations``, and
     ``events`` fields use backward-compatible placeholder types so that
@@ -596,13 +572,14 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
     scene: Any = field(default=None)
     """SO101SceneCfg with robot, ground, light.  Populated in __post_init__."""
 
-    # --- Camera flags (Bundle C.1) ---
+    # --- Camera flags (DR100 Phase 1) ---
     enable_cameras: bool = False
-    """If True, wires wrist + overhead CameraCfgs + obs terms. Requires
+    """If True, wires D435 CameraCfg + d435_rgb obs term. Requires
     AppLauncher(enable_cameras=True) at app launch."""
 
     camera_resolution: tuple = (128, 128)
-    """(width, height) per camera. Default 128² is RTX 3080 friendly."""
+    """Kept for backward compatibility. D435 is fixed at (640, 480) to match
+    the real SO-101 dataset schema."""
 
     # --- MDP manager sub-configs (backward-compat placeholder types) ---
     observations: SO101ObservationsCfg = field(default_factory=SO101ObservationsCfg)
@@ -621,24 +598,20 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
     """Domain randomization event config (disabled by default)."""
 
     def _wire_cameras(self) -> None:
-        """Populate scene + obs terms with camera cfgs. Called by __post_init__
+        """Populate scene + obs terms with D435 camera cfg. Called by __post_init__
         when ``enable_cameras=True``."""
         from . import observations as _obs_mod
 
         if not (_ISAACLAB_AVAILABLE and CameraCfg is not None):
             return
 
-        # Scene-side cfgs
-        self.scene.wrist_camera = _make_wrist_camera_cfg(self.camera_resolution)
-        self.scene.overhead_camera = _make_overhead_camera_cfg(self.camera_resolution)
+        # Scene-side cfg: wrist-mounted D435, 640×480, 30 Hz
+        self.scene.d435_camera = _make_d435_camera_cfg()
 
-        # Observation-term cfgs (channel-first uint8, LeRobot v3 convention)
+        # Observation-term cfg: channel-first uint8, LeRobot v3 convention
         if hasattr(self.observations, "policy") and self.observations.policy is not None:
-            self.observations.policy.wrist_camera_rgb = ObservationTermCfg(
-                func=_obs_mod.wrist_camera_rgb,
-            )
-            self.observations.policy.overhead_camera_rgb = ObservationTermCfg(
-                func=_obs_mod.overhead_camera_rgb,
+            self.observations.policy.d435_rgb = ObservationTermCfg(
+                func=_obs_mod.d435_rgb,
             )
 
     def __post_init__(self) -> None:
@@ -692,7 +665,7 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
             # __post_init__.
             self.terminations = TerminationsCfg()
 
-            # Wire cameras + camera obs terms if enabled.
+            # Wire D435 camera + d435_rgb obs term if enabled.
             if self.enable_cameras:
                 self._wire_cameras()
 
