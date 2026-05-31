@@ -66,6 +66,7 @@ def make_env(
     task: str = "pick",
     num_envs: int = 1,
     headless: bool = True,
+    enable_cameras: bool = False,
 ) -> ManagerBasedRLEnv:
     """Create a gymnasium-wrapped Isaac Lab environment for the given task.
 
@@ -113,7 +114,10 @@ def make_env(
         )
 
     cfg_cls = _TASK_CFG_MAP[task]
-    cfg = cfg_cls()
+    # enable_cameras MUST be passed at construction — __post_init__ wires the
+    # d435_rgb obs term + sets concatenate_terms=False inside _wire_cameras().
+    # Requires AppLauncher(enable_cameras=True) at app launch.
+    cfg = cfg_cls(enable_cameras=enable_cameras)
     cfg.scene.num_envs = num_envs
 
     return ManagerBasedRLEnv(cfg=cfg)
