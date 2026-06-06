@@ -48,7 +48,7 @@ Observation term functions (in `observations.py`, all require Isaac Lab at call 
 | LeRobot column | `observation.images.d435_rgb` |
 | H-FOV | ~69.4° (`2·atan(2.8/4.0)·180/π`) — within 1° of real D435 |
 | Update rate | 30 Hz (1/30 s period) |
-| Prim path | `{ENV_REGEX_NS}/Robot/base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link/d435` |
+| Prim path | `{ENV_REGEX_NS}/Robot/Geometry/base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link/d435` (Geometry scope — so101_new_calib USD, verified by GPU boot 2026-05-30) |
 | Prim source | Confirmed from `assets/usd/Payload/Physics.usda` |
 
 Enable via `SO101EnvCfg(enable_cameras=True)` + `AppLauncher(enable_cameras=True)`.
@@ -128,7 +128,7 @@ cfg = SO101EnvCfg(enable_cameras=True)
 # AppLauncher must also be launched with enable_cameras=True
 ```
 
-Camera prim path auto-wired to `wrist_link/d435` (confirmed from USD hierarchy).
+Camera prim path auto-wired to `Geometry/.../wrist_link/d435` (confirmed from USD hierarchy).
 See Isaac Lab tutorial 04: https://isaac-sim.github.io/IsaacLab/source/tutorials/04_sensors/
 
 ---
