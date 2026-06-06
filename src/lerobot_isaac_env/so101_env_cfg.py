@@ -182,8 +182,9 @@ class SO101SceneCfg(InteractiveSceneCfg):
 
     # D435 wrist camera (DR100 Phase 1) — populated by SO101EnvCfg.__post_init__
     # when SO101EnvCfg.enable_cameras=True. Default: None (cameras off).
-    # Prim path: {ENV_REGEX_NS}/Robot/base_link/shoulder_link/upper_arm_link/
-    #            lower_arm_link/wrist_link/d435
+    # Prim path: {ENV_REGEX_NS}/Robot/Geometry/base_link/shoulder_link/
+    #            upper_arm_link/lower_arm_link/wrist_link/d435
+    #            (Geometry scope confirmed in so101_new_calib USD, 2026-05-30)
     # (confirmed from assets/usd/Payload/Physics.usda hierarchy)
     d435_camera: Any = None
 
@@ -206,9 +207,12 @@ def _make_d435_camera_cfg(
     With ``horizontal_aperture=2.8, focal_length=2.0``:
     ``2·atan(2.8/4.0)·180/π = 69.4°`` — within 1° of real D435.
 
-    Prim path parent: wrist_link confirmed from USD hierarchy:
-    ``base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link``
-    (see ``assets/usd/Payload/Physics.usda``).
+    Prim path parent: wrist_link, confirmed from the CURRENT USD hierarchy
+    (``so101_new_calib``, re-converted 2026-05-25). The kinematic chain lives
+    under a ``Geometry`` Scope:
+    ``Robot/Geometry/base_link/shoulder_link/upper_arm_link/lower_arm_link/wrist_link``
+    (verified 2026-05-30 by GPU boot — the older ``Payload/Physics.usda`` path
+    omitted the ``Geometry`` scope and raised "Unable to find source prim path").
 
     Parameters
     ----------
@@ -219,7 +223,7 @@ def _make_d435_camera_cfg(
         return None
     return CameraCfg(
         prim_path=(
-            "{ENV_REGEX_NS}/Robot"
+            "{ENV_REGEX_NS}/Robot/Geometry"
             "/base_link/shoulder_link/upper_arm_link/lower_arm_link"
             "/wrist_link/d435"
         ),
@@ -613,6 +617,15 @@ class SO101EnvCfg(ManagerBasedRLEnvCfg):
             self.observations.policy.d435_rgb = ObservationTermCfg(
                 func=_obs_mod.d435_rgb,
             )
+            # With an image term present the policy group is heterogeneous —
+            # image (3,480,640) + low-dim state (6,). Isaac Lab cannot
+            # concatenate mixed-shape terms, so the group MUST stay in dict
+            # mode. Default ``concatenate_terms=True`` flattens single-shape
+            # groups to a bare Tensor; once an image term is added that path
+            # makes ``env.reset()`` return ``obs['policy']`` as a Tensor and
+            # ``obs['policy'].keys()`` raises AttributeError (regression seen
+            # 2026-05-26 after DR100 Phase 1 dropped the overhead cam term).
+            self.observations.policy.concatenate_terms = False
 
     def __post_init__(self) -> None:
         """Wire real Isaac Lab configs when Isaac Lab is available."""
