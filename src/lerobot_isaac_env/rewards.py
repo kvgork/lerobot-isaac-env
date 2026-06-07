@@ -250,3 +250,109 @@ def progress_reward(
         )
 
     return -dist / distance_scale
+
+
+# ---------------------------------------------------------------------------
+# Staged pick-and-place shaping (reach → grasp → lift → place)
+# ---------------------------------------------------------------------------
+#
+# Composes with the dense `progress_reward` (reach) + sparse `success_bonus`.
+# Wired only when LEROBOT_ISAAC_STAGED_REWARD=1 (see tasks/pick_and_place.py);
+# OFF by default so existing runs are unchanged.
+#
+# NOT yet GPU-verified — the gripper-closure direction, lift threshold, and
+# target xy are config-driven best guesses (object rest z≈0.05, target_bin at
+# (0.5,-0.2,0.01)). Verify + tune on a short num_envs=1 smoke before a full run.
+
+
+def _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name):
+    """Shared helper: (ee_pos, obj_pos, dist) with graceful EE-body fallback."""
+    robot = env.scene[robot_cfg.name]
+    obj = env.scene[object_cfg.name]
+    try:
+        ee_idx_list, _ = robot.find_bodies(ee_body_name)
+        ee_idx = int(ee_idx_list[0]) if len(ee_idx_list) else 0
+    except Exception:  # noqa: BLE001
+        ee_idx = 0
+    ee_pos = robot.data.body_pos_w[:, ee_idx, :]  # (N, 3)
+    obj_pos = obj.data.root_pos_w  # (N, 3)
+    dist = torch.norm(ee_pos - obj_pos, dim=-1)  # (N,)
+    return ee_pos, obj_pos, dist
+
+
+def grasp_reward(
+    env: ManagerBasedRLEnv,
+    std: float = 0.04,
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+) -> torch.Tensor:
+    """Proximity gate for the grasp stage: tight Gaussian on EE→object distance.
+
+    Reward ≈ 1 only when the end-effector is essentially on the object (within
+    a few cm), so it fires just before/at grasp — distinct from the broader
+    `progress_reward` reach shaping. A true contact/closure-based grasp signal
+    is a GPU-verify refinement; this proximity proxy needs no gripper-direction
+    assumption and degrades gracefully.
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    _, _, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    return torch.exp(-torch.square(dist) / (2 * std**2))
+
+
+def lift_reward(
+    env: ManagerBasedRLEnv,
+    object_cfg: Any = None,
+    rest_height: float = 0.05,
+    margin: float = 0.01,
+    max_height: float = 0.25,
+) -> torch.Tensor:
+    """Reward for raising the object above its rest height (the "pick").
+
+    Robust, no gripper assumptions: ``clamp(obj_z - (rest_height + margin), 0, cap)``.
+    ``rest_height`` defaults to the source_object spawn z (0.05); ``margin``
+    ignores jitter; ``max_height`` caps the bonus so it can't dominate.
+
+    Returns ``(num_envs,)`` in ``[0, max_height - margin]``.
+    """
+    _require_isaaclab()
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    obj = env.scene[object_cfg.name]
+    obj_z = obj.data.root_pos_w[:, 2]  # (N,)
+    lifted = obj_z - (rest_height + margin)
+    return torch.clamp(lifted, min=0.0, max=max_height)
+
+
+def place_reward(
+    env: ManagerBasedRLEnv,
+    target_pos: tuple[float, float, float] = (0.5, -0.2, 0.01),
+    std: float = 0.05,
+    rest_height: float = 0.05,
+    margin: float = 0.02,
+    object_cfg: Any = None,
+) -> torch.Tensor:
+    """Reward for moving the (lifted) object toward the target bin xy.
+
+    Gated by "lifted" so the agent must pick before place credit accrues:
+    ``lifted_gate * exp(-xy_dist² / 2std²)``. ``target_pos`` is passed in (the
+    target_bin is a static marker with no sim rigid-body state — its pose lives
+    in the cfg, not the simulator).
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    obj = env.scene[object_cfg.name]
+    obj_pos = obj.data.root_pos_w  # (N, 3)
+    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
+    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
+    lifted_gate = (obj_pos[:, 2] > (rest_height + margin)).to(obj_pos.dtype)
+    return lifted_gate * torch.exp(-torch.square(xy_dist) / (2 * std**2))

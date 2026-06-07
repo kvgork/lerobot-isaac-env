@@ -39,6 +39,16 @@ _OBJECT_POS = (
     float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.1")),
     float(os.environ.get("LEROBOT_ISAAC_OBJECT_Z", "0.05")),
 )
+# Target bin xy (place destination). Static visual marker; reward reads this
+# cfg value, not a sim rigid-body pose.
+_TARGET_POS = (
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_X", "0.5")),
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_Y", "-0.2")),
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_Z", "0.01")),
+)
+# Staged reach→grasp→lift→place shaping. OFF by default (preserves current
+# progress+success behaviour). Enable + GPU-verify before relying on it.
+_STAGED_REWARD = os.environ.get("LEROBOT_ISAAC_STAGED_REWARD", "0") not in ("0", "", "false", "False")
 
 from dataclasses import dataclass
 
@@ -246,6 +256,49 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                 if self.rewards is not None:
                     self.rewards.progress = None
 
+            # Staged shaping (reach→grasp→lift→place). OFF by default; enable with
+            # LEROBOT_ISAAC_STAGED_REWARD=1. progress (above) covers "reach"; this
+            # adds the grasp proximity gate, the lift bonus (the actual "pick"
+            # signal), and the place bonus (lifted object → target bin xy).
+            # Attributes are set dynamically — Isaac Lab's reward manager collects
+            # every RewardTermCfg on the cfg (same mechanism as `progress` above),
+            # so undeclared fields are fine.
+            # WEIGHTS ARE UNVERIFIED — tune on a num_envs=1 GPU smoke before a full
+            # run (Isaac scales reward by weight*dt). See rewards.py stage notes.
+            if _STAGED_REWARD:
+                try:
+                    from lerobot_isaac_env import rewards as _rmod
+                    from isaaclab.managers import SceneEntityCfg  # type: ignore[import]
+                    if RewardTermCfg is not None and self.rewards is not None:
+                        _src = SceneEntityCfg("source_object")
+                        self.rewards.grasp = RewardTermCfg(
+                            func=_rmod.grasp_reward,
+                            params={"object_cfg": _src, "ee_body_name": "gripper_link"},
+                            weight=2.0,
+                        )
+                        self.rewards.lift = RewardTermCfg(
+                            func=_rmod.lift_reward,
+                            params={
+                                "object_cfg": _src,
+                                "rest_height": float(_OBJECT_POS[2]),
+                            },
+                            weight=5.0,
+                        )
+                        self.rewards.place = RewardTermCfg(
+                            func=_rmod.place_reward,
+                            params={
+                                "object_cfg": _src,
+                                "target_pos": _TARGET_POS,
+                                "rest_height": float(_OBJECT_POS[2]),
+                            },
+                            weight=5.0,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "staged reward wiring failed: %s", exc
+                    )
+
             # Add target bin as a STATIC visual marker (AssetBaseCfg, not
             # RigidObjectCfg). Isaac Sim 6.0 + PhysX 6.0 hang sim.reset
             # when a kinematic RigidObjectCfg sources its geometry from
@@ -262,7 +315,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         size=(0.15, 0.15, 0.02),
                     ),
                     init_state=AssetBaseCfg.InitialStateCfg(
-                        pos=(0.5, -0.2, 0.01),
+                        pos=_TARGET_POS,  # kept in sync with place_reward target
                         rot=(1.0, 0.0, 0.0, 0.0),
                     ),
                 )
