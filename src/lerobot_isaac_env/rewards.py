@@ -407,3 +407,46 @@ def grasp_closure_reward(
     norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)  # 0 at lower, 1 at upper
     closedness = norm if closed_high else (1.0 - norm)
     return prox * closedness
+
+
+def place_success_reward(
+    env: ManagerBasedRLEnv,
+    target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
+    success_radius: float = 0.06,
+    rest_height: float = 0.05,
+    lift_margin: float = 0.02,
+    bonus: float = 5.0,
+    object_cfg: Any = None,
+) -> torch.Tensor:
+    """Dominant, dt-INVARIANT terminal bonus for placing the object in the bin.
+
+    The plan's success criterion is "object placed in the target bin", but the
+    wired ``success_bonus`` (``success_reward``) is only a proximity Gaussian and
+    Isaac's RewardManager multiplies every term by ``dt`` (≈1/30), so a normal
+    weight gives a negligible bonus. This term cancels that ``dt`` (``/step_dt``)
+    so the returned magnitude is the per-step reward the env actually sees:
+    ``RewardManager`` computes ``func * weight * dt`` → ``(bonus/dt) * weight * dt
+    = bonus * weight``. With ``weight=1`` the placed state is worth ``bonus`` per
+    step (≈25× a reach step at bonus=5), making success dominate the ladder.
+
+    "Placed" = object xy within ``success_radius`` of the target AND object was
+    raised above ``rest_height + lift_margin`` at least to the bin lip (so it was
+    carried, not slid). Pays every step the object stays placed (a strong attractor
+    to keep it in the bin).
+
+    Returns ``(num_envs,)`` — ``bonus/step_dt`` where placed, else 0.
+    """
+    _require_isaaclab()
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    obj = env.scene[object_cfg.name]
+    obj_pos = obj.data.root_pos_w  # (N, 3)
+    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
+    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
+    at_target = xy_dist < success_radius
+    # Require the object to have been lifted (off its rest height) — a placed
+    # object sits near the bin top, above the table rest height.
+    was_lifted = obj_pos[:, 2] > (rest_height + lift_margin)
+    placed = (at_target & was_lifted).to(obj_pos.dtype)
+    step_dt = float(getattr(env, "step_dt", 1.0 / 30.0)) or (1.0 / 30.0)
+    return placed * (bonus / step_dt)

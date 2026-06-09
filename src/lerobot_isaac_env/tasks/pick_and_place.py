@@ -69,6 +69,11 @@ _PLACE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_WEIGHT", "5.0"))
 # the true arbiter so a wrong sign is unhelpful, never farmable.
 _CLOSURE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_CLOSURE_WEIGHT", "0.0"))
 _GRIPPER_CLOSED_HIGH = os.environ.get("LEROBOT_ISAAC_GRIPPER_CLOSED_HIGH", "1") not in ("0", "", "false", "False")
+# place_success — dominant dt-INVARIANT terminal bonus for object-in-bin. The
+# func cancels RewardManager's *dt internally, so net per-step reward = weight *
+# bonus. Opt-in (weight default 0). bonus 5 -> placed state ~25x a reach step.
+_PLACE_SUCCESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_WEIGHT", "0.0"))
+_PLACE_SUCCESS_BONUS = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_BONUS", "5.0"))
 # grasp proximity Gaussian std (m). 0.04 ≈ EE must be within ~4 cm. Widen (e.g.
 # 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
 # 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
@@ -334,6 +339,19 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                             },
                             weight=_PLACE_WEIGHT,
                         )
+                        # Dominant dt-invariant terminal bonus for object-in-bin
+                        # (opt-in via LEROBOT_ISAAC_PLACE_SUCCESS_WEIGHT>0).
+                        if _PLACE_SUCCESS_WEIGHT > 0.0:
+                            self.rewards.place_success = RewardTermCfg(
+                                func=_rmod.place_success_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "target_pos": _TARGET_POS,
+                                    "rest_height": float(_OBJECT_POS[2]),
+                                    "bonus": _PLACE_SUCCESS_BONUS,
+                                },
+                                weight=_PLACE_SUCCESS_WEIGHT,
+                            )
                 except Exception as exc:  # noqa: BLE001
                     import logging
                     logging.getLogger(__name__).warning(
