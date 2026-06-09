@@ -57,6 +57,17 @@ Enable via `SO101EnvCfg(enable_cameras=True)` + `AppLauncher(enable_cameras=True
 
 ---
 
+## Reachability (pick/place tasks) — 2026-06-09
+
+SO-101 **max planar reach ≈ 0.346 m** from base origin (measured via
+`scripts/_reach_probe.py`). Keep `LEROBOT_ISAAC_OBJECT_X/Y` and `_TARGET_X/Y` inside
+**r ≈ 0.30 m**. The old defaults (object 0.51 m, target 0.54 m) were beyond reach → every pick
+run plateaued at "reach as far as possible" (reward ≈ −55) and grasp/lift/place never fired — a
+task-geometry bug misread as reward tuning. Defaults now object (0.22, 0.05, 0.05) / target
+(0.22, −0.13, 0.01). `grasp_reward` is pure proximity (doesn't grip/lift the object) — a real
+pick needs a contact/closure grasp signal. See
+`plans/2026-06-09-staged-reward-tuning-results.md`.
+
 ## Key Files
 
 | File | Role |
