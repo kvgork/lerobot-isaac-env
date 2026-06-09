@@ -356,3 +356,54 @@ def place_reward(
     xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
     lifted_gate = (obj_pos[:, 2] > (rest_height + margin)).to(obj_pos.dtype)
     return lifted_gate * torch.exp(-torch.square(xy_dist) / (2 * std**2))
+
+
+def grasp_closure_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+    gripper_joint_name: str = "gripper",
+    proximity_std: float = 0.06,
+    closed_high: bool = True,
+) -> torch.Tensor:
+    """Reward CLOSING the gripper on the object — the missing "grip" incentive.
+
+    The proximity-only ``grasp_reward`` rewards reaching the object but never
+    closing the jaw, so the cube is never gripped and ``lift_reward`` can't fire
+    (run #2, 2026-06-09, plateaued reaching ~7 cm short with the jaw open). This
+    term = ``proximity_gate * closedness``:
+
+    - ``proximity_gate`` = ``exp(-dist² / 2·proximity_std²)`` (EE near object).
+      Slightly wider ``proximity_std`` (0.06) than ``grasp_reward`` so closing is
+      encouraged as the arm arrives, not only at exact contact.
+    - ``closedness`` = the gripper joint position normalised by its own limits to
+      ``[0, 1]``; ``closed_high`` selects which limit is "closed" (the SO-101
+      convention is resolved empirically — see scripts/_gripper_probe.py).
+
+    Only pays when BOTH near AND closing, so it can't be farmed by snapping the
+    jaw shut in free space. Composes with ``lift_reward`` (the true pick signal).
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    robot = env.scene[robot_cfg.name]
+
+    _, _, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    prox = torch.exp(-torch.square(dist) / (2 * proximity_std**2))  # (N,) in [0,1]
+
+    try:
+        jaw_ids, _ = robot.find_joints(gripper_joint_name)
+        jaw_idx = int(jaw_ids[0]) if len(jaw_ids) else -1
+    except Exception:  # noqa: BLE001
+        jaw_idx = -1
+    jaw = robot.data.joint_pos[:, jaw_idx]  # (N,)
+    limits = robot.data.joint_pos_limits[:, jaw_idx, :]  # (N, 2) lower, upper
+    span = (limits[:, 1] - limits[:, 0]).clamp_min(1e-6)
+    norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)  # 0 at lower, 1 at upper
+    closedness = norm if closed_high else (1.0 - norm)
+    return prox * closedness

@@ -62,6 +62,13 @@ _STAGED_REWARD = os.environ.get("LEROBOT_ISAAC_STAGED_REWARD", "0") not in ("0",
 _GRASP_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_GRASP_WEIGHT", "2.0"))
 _LIFT_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_WEIGHT", "5.0"))
 _PLACE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_WEIGHT", "5.0"))
+# grasp_closure term — rewards CLOSING the jaw on the object (the missing grip
+# incentive; run #2 2026-06-09 reached the object but never closed → no lift).
+# closed_high: SO-101 gripper angle increases to close (limits [-0.17, 1.75]),
+# so the upper limit is "closed". Env-tunable (set =0 to flip) — lift_reward is
+# the true arbiter so a wrong sign is unhelpful, never farmable.
+_CLOSURE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_CLOSURE_WEIGHT", "0.0"))
+_GRIPPER_CLOSED_HIGH = os.environ.get("LEROBOT_ISAAC_GRIPPER_CLOSED_HIGH", "1") not in ("0", "", "false", "False")
 # grasp proximity Gaussian std (m). 0.04 ≈ EE must be within ~4 cm. Widen (e.g.
 # 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
 # 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
@@ -297,6 +304,19 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                             },
                             weight=_GRASP_WEIGHT,
                         )
+                        # Closure term (opt-in via LEROBOT_ISAAC_CLOSURE_WEIGHT>0):
+                        # rewards closing the jaw ON the object so lift can fire.
+                        if _CLOSURE_WEIGHT > 0.0:
+                            self.rewards.grasp_closure = RewardTermCfg(
+                                func=_rmod.grasp_closure_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "ee_body_name": "gripper_link",
+                                    "gripper_joint_name": "gripper",
+                                    "closed_high": _GRIPPER_CLOSED_HIGH,
+                                },
+                                weight=_CLOSURE_WEIGHT,
+                            )
                         self.rewards.lift = RewardTermCfg(
                             func=_rmod.lift_reward,
                             params={
