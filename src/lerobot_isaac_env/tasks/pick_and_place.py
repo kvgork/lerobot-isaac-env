@@ -49,6 +49,13 @@ _TARGET_POS = (
 # Staged reach→grasp→lift→place shaping. OFF by default (preserves current
 # progress+success behaviour). Enable + GPU-verify before relying on it.
 _STAGED_REWARD = os.environ.get("LEROBOT_ISAAC_STAGED_REWARD", "0") not in ("0", "", "false", "False")
+# Per-stage weights — env-tunable so the reward ladder can be balanced on a
+# num_envs=1 smoke without re-editing code (plan 2026-06-08 Step 1). Isaac
+# scales reward by weight*dt; tune so reach < grasp < lift < place < success.
+# Defaults preserve the original hardcoded values (grasp 2 / lift 5 / place 5).
+_GRASP_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_GRASP_WEIGHT", "2.0"))
+_LIFT_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_WEIGHT", "5.0"))
+_PLACE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_WEIGHT", "5.0"))
 
 from dataclasses import dataclass
 
@@ -274,7 +281,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         self.rewards.grasp = RewardTermCfg(
                             func=_rmod.grasp_reward,
                             params={"object_cfg": _src, "ee_body_name": "gripper_link"},
-                            weight=2.0,
+                            weight=_GRASP_WEIGHT,
                         )
                         self.rewards.lift = RewardTermCfg(
                             func=_rmod.lift_reward,
@@ -282,7 +289,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                                 "object_cfg": _src,
                                 "rest_height": float(_OBJECT_POS[2]),
                             },
-                            weight=5.0,
+                            weight=_LIFT_WEIGHT,
                         )
                         self.rewards.place = RewardTermCfg(
                             func=_rmod.place_reward,
@@ -291,7 +298,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                                 "target_pos": _TARGET_POS,
                                 "rest_height": float(_OBJECT_POS[2]),
                             },
-                            weight=5.0,
+                            weight=_PLACE_WEIGHT,
                         )
                 except Exception as exc:  # noqa: BLE001
                     import logging
