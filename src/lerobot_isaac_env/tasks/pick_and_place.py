@@ -31,19 +31,25 @@ import os
 # LEROBOT_ISAAC_PROGRESS_WEIGHT — dense reward weight. 0 disables progress
 #   shaping (sparse-only). Default 10.0 preserves prior behaviour.
 # LEROBOT_ISAAC_OBJECT_X/Y/Z — source_object spawn position. Default
-#   (0.5, 0.1, 0.05). Trial 6 of plans/2026-05-24-wm-isaac-hp-trials-1to9.md
-#   uses (0.30, 0.05, 0.05) for the "object-at-home curriculum".
+#   (0.22, 0.05, 0.05) — INSIDE the SO-101 reach envelope (max planar reach
+#   ~0.346 m, measured 2026-06-09 via scripts/_reach_probe.py). The prior
+#   default (0.5, 0.1) = 0.51 m sat 0.16 m BEYOND reach, so every pick attempt
+#   (incl. the 2026-05 baseline) plateaued at "reach as far as possible" and
+#   grasp/lift/place never fired — a task-geometry bug, not a reward bug. See
+#   plans/2026-06-09-staged-reward-tuning-results.md. Keep object+target inside
+#   r ~= 0.30 m.
 _PROGRESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PROGRESS_WEIGHT", "10.0"))
 _OBJECT_POS = (
-    float(os.environ.get("LEROBOT_ISAAC_OBJECT_X", "0.5")),
-    float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.1")),
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_X", "0.22")),
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.05")),
     float(os.environ.get("LEROBOT_ISAAC_OBJECT_Z", "0.05")),
 )
 # Target bin xy (place destination). Static visual marker; reward reads this
-# cfg value, not a sim rigid-body pose.
+# cfg value, not a sim rigid-body pose. Default (0.22, -0.13) = 0.256 m, inside
+# reach, laterally separated from the object for a real pick->place.
 _TARGET_POS = (
-    float(os.environ.get("LEROBOT_ISAAC_TARGET_X", "0.5")),
-    float(os.environ.get("LEROBOT_ISAAC_TARGET_Y", "-0.2")),
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_X", "0.22")),
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_Y", "-0.13")),
     float(os.environ.get("LEROBOT_ISAAC_TARGET_Z", "0.01")),
 )
 # Staged reach→grasp→lift→place shaping. OFF by default (preserves current
@@ -56,6 +62,10 @@ _STAGED_REWARD = os.environ.get("LEROBOT_ISAAC_STAGED_REWARD", "0") not in ("0",
 _GRASP_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_GRASP_WEIGHT", "2.0"))
 _LIFT_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_WEIGHT", "5.0"))
 _PLACE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_WEIGHT", "5.0"))
+# grasp proximity Gaussian std (m). 0.04 ≈ EE must be within ~4 cm. Widen (e.g.
+# 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
+# 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
+_GRASP_STD = float(os.environ.get("LEROBOT_ISAAC_GRASP_STD", "0.04"))
 
 from dataclasses import dataclass
 
@@ -280,7 +290,11 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         _src = SceneEntityCfg("source_object")
                         self.rewards.grasp = RewardTermCfg(
                             func=_rmod.grasp_reward,
-                            params={"object_cfg": _src, "ee_body_name": "gripper_link"},
+                            params={
+                                "object_cfg": _src,
+                                "ee_body_name": "gripper_link",
+                                "std": _GRASP_STD,
+                            },
                             weight=_GRASP_WEIGHT,
                         )
                         self.rewards.lift = RewardTermCfg(
