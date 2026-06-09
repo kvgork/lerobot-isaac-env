@@ -450,3 +450,58 @@ def place_success_reward(
     placed = (at_target & was_lifted).to(obj_pos.dtype)
     step_dt = float(getattr(env, "step_dt", 1.0 / 30.0)) or (1.0 / 30.0)
     return placed * (bonus / step_dt)
+
+
+def lift_shaping_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+    gripper_joint_name: str = "gripper",
+    proximity_std: float = 0.06,
+    closed_high: bool = True,
+    rest_height: float = 0.05,
+    height_scale: float = 0.15,
+) -> torch.Tensor:
+    """Gradient for RAISING the gripper while it grips the object — the missing
+    lift-exploration signal.
+
+    Grip physics is fine (the gripper holds the cube — verified
+    scripts/_grip_physics_probe.py), but the agent plateaus at reach→close→stay-low:
+    ``lift_reward`` keys on the OBJECT's height, so it pays nothing until the object
+    is already up, giving no gradient toward the lifting MOTION. This term rewards
+    ``grip * ee_height`` — being near + closed (a grip) AND raising the
+    end-effector — so the actor is pulled to lift the gripped object, which then
+    triggers ``lift_reward`` proper.
+
+    ``grip`` = proximity_gate × jaw_closedness (∈[0,1]); ``ee_height`` =
+    clamp((ee_z − rest_height)/height_scale, 0, 1). Can't be farmed by lifting an
+    empty gripper — the proximity gate requires the object to be right there, and
+    since grip works, "near + closed + raised" means the object comes up too.
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    robot = env.scene[robot_cfg.name]
+
+    ee_pos, _, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    prox = torch.exp(-torch.square(dist) / (2 * proximity_std**2))
+
+    try:
+        jaw_ids, _ = robot.find_joints(gripper_joint_name)
+        jaw_idx = int(jaw_ids[0]) if len(jaw_ids) else -1
+    except Exception:  # noqa: BLE001
+        jaw_idx = -1
+    jaw = robot.data.joint_pos[:, jaw_idx]
+    limits = robot.data.joint_pos_limits[:, jaw_idx, :]
+    span = (limits[:, 1] - limits[:, 0]).clamp_min(1e-6)
+    norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)
+    closedness = norm if closed_high else (1.0 - norm)
+
+    grip = prox * closedness  # (N,) ~1 when gripping the object
+    ee_height = ((ee_pos[:, 2] - rest_height) / height_scale).clamp(0.0, 1.0)
+    return grip * ee_height

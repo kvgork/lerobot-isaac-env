@@ -74,6 +74,10 @@ _GRIPPER_CLOSED_HIGH = os.environ.get("LEROBOT_ISAAC_GRIPPER_CLOSED_HIGH", "1") 
 # bonus. Opt-in (weight default 0). bonus 5 -> placed state ~25x a reach step.
 _PLACE_SUCCESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_WEIGHT", "0.0"))
 _PLACE_SUCCESS_BONUS = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_BONUS", "5.0"))
+# lift_shaping — gradient for RAISING the gripped object (the missing lift-
+# exploration signal; grip physics is fine but lift_reward keys on object-z so
+# gives no gradient toward the lifting motion). Opt-in (weight default 0).
+_LIFT_SHAPING_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_SHAPING_WEIGHT", "0.0"))
 # grasp proximity Gaussian std (m). 0.04 ≈ EE must be within ~4 cm. Widen (e.g.
 # 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
 # 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
@@ -330,6 +334,20 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                             },
                             weight=_LIFT_WEIGHT,
                         )
+                        # Lift-MOTION shaping: gradient for raising the gripped
+                        # object (opt-in via LEROBOT_ISAAC_LIFT_SHAPING_WEIGHT>0).
+                        if _LIFT_SHAPING_WEIGHT > 0.0:
+                            self.rewards.lift_shaping = RewardTermCfg(
+                                func=_rmod.lift_shaping_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "ee_body_name": "gripper_link",
+                                    "gripper_joint_name": "gripper",
+                                    "closed_high": _GRIPPER_CLOSED_HIGH,
+                                    "rest_height": float(_OBJECT_POS[2]),
+                                },
+                                weight=_LIFT_SHAPING_WEIGHT,
+                            )
                         self.rewards.place = RewardTermCfg(
                             func=_rmod.place_reward,
                             params={
