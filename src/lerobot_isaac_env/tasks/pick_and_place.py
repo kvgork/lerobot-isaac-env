@@ -78,6 +78,11 @@ _PLACE_SUCCESS_BONUS = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_BONUS",
 # exploration signal; grip physics is fine but lift_reward keys on object-z so
 # gives no gradient toward the lifting motion). Opt-in (weight default 0).
 _LIFT_SHAPING_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_SHAPING_WEIGHT", "0.0"))
+# place_reward Gaussian std (m) on xy-to-target. Default 0.05 only pays within
+# ~5 cm of the bin — too local to guide a CARRY from the ~0.16 m-away pickup.
+# Widen (e.g. 0.15) so the lifted object gets a gradient toward the bin from the
+# pickup point. Env-tunable.
+_PLACE_STD = float(os.environ.get("LEROBOT_ISAAC_PLACE_STD", "0.05"))
 # grasp proximity Gaussian std (m). 0.04 ≈ EE must be within ~4 cm. Widen (e.g.
 # 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
 # 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
@@ -354,6 +359,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                                 "object_cfg": _src,
                                 "target_pos": _TARGET_POS,
                                 "rest_height": float(_OBJECT_POS[2]),
+                                "std": _PLACE_STD,
                             },
                             weight=_PLACE_WEIGHT,
                         )
