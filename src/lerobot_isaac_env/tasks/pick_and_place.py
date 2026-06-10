@@ -82,6 +82,9 @@ _PLACE_SUCCESS_BONUS = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_BONUS",
 # exploration signal; grip physics is fine but lift_reward keys on object-z so
 # gives no gradient toward the lifting motion). Opt-in (weight default 0).
 _LIFT_SHAPING_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_SHAPING_WEIGHT", "0.0"))
+# carry_shaping — gradient for moving the gripped+lifted die toward the bin (die16
+# plateaued lifting-in-place). Opt-in (weight default 0).
+_CARRY_SHAPING_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_CARRY_SHAPING_WEIGHT", "0.0"))
 # place_reward Gaussian std (m) on xy-to-target. Default 0.05 only pays within
 # ~5 cm of the bin — too local to guide a CARRY from the ~0.16 m-away pickup.
 # Widen (e.g. 0.15) so the lifted object gets a gradient toward the bin from the
@@ -371,6 +374,21 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                             },
                             weight=_PLACE_WEIGHT,
                         )
+                        # Carry shaping: move the gripped+lifted die to the bin
+                        # (opt-in via LEROBOT_ISAAC_CARRY_SHAPING_WEIGHT>0).
+                        if _CARRY_SHAPING_WEIGHT > 0.0:
+                            self.rewards.carry_shaping = RewardTermCfg(
+                                func=_rmod.carry_shaping_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "ee_body_name": "gripper_link",
+                                    "gripper_joint_name": "gripper",
+                                    "closed_high": _GRIPPER_CLOSED_HIGH,
+                                    "rest_height": float(_OBJECT_POS[2]),
+                                    "target_pos": _TARGET_POS,
+                                },
+                                weight=_CARRY_SHAPING_WEIGHT,
+                            )
                         # Dominant dt-invariant terminal bonus for object-in-bin
                         # (opt-in via LEROBOT_ISAAC_PLACE_SUCCESS_WEIGHT>0).
                         if _PLACE_SUCCESS_WEIGHT > 0.0:

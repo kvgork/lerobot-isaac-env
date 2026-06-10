@@ -505,3 +505,56 @@ def lift_shaping_reward(
     grip = prox * closedness  # (N,) ~1 when gripping the object
     ee_height = ((ee_pos[:, 2] - rest_height) / height_scale).clamp(0.0, 1.0)
     return grip * ee_height
+
+
+def carry_shaping_reward(
+    env: ManagerBasedRLEnv,
+    target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+    gripper_joint_name: str = "gripper",
+    proximity_std: float = 0.06,
+    closed_high: bool = True,
+    rest_height: float = 0.05,
+    lift_margin: float = 0.02,
+    approach_std: float = 0.15,
+) -> torch.Tensor:
+    """Gradient for CARRYING the gripped+lifted object toward the bin.
+
+    die16 plateaued at −7.5: with a graspable 16 mm die the agent grasps + lifts but
+    then HOLDS the die up in place (maximising lift_shaping) instead of carrying it.
+    This term continues the gradient past lifting: ``grip × lifted × approach``, where
+    ``approach = exp(-xy_dist²/2·approach_std²)`` pulls the object's xy toward the
+    target from the pickup (wide std). Gated on STILL gripping + lifted, so it rewards
+    transporting the held die, not dropping it. Composes with place_reward/place_success.
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    robot = env.scene[robot_cfg.name]
+    obj = env.scene[object_cfg.name]
+
+    _, obj_pos, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    prox = torch.exp(-torch.square(dist) / (2 * proximity_std**2))
+    try:
+        jaw_ids, _ = robot.find_joints(gripper_joint_name)
+        jaw_idx = int(jaw_ids[0]) if len(jaw_ids) else -1
+    except Exception:  # noqa: BLE001
+        jaw_idx = -1
+    jaw = robot.data.joint_pos[:, jaw_idx]
+    limits = robot.data.joint_pos_limits[:, jaw_idx, :]
+    span = (limits[:, 1] - limits[:, 0]).clamp_min(1e-6)
+    norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)
+    closedness = norm if closed_high else (1.0 - norm)
+    grip = prox * closedness
+
+    lifted = (obj_pos[:, 2] > (rest_height + lift_margin)).to(obj_pos.dtype)
+    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
+    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)
+    approach = torch.exp(-torch.square(xy_dist) / (2 * approach_std**2))
+    return grip * lifted * approach
