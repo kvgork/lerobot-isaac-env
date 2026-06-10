@@ -39,6 +39,10 @@ import os
 #   plans/2026-06-09-staged-reward-tuning-results.md. Keep object+target inside
 #   r ~= 0.30 m.
 _PROGRESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PROGRESS_WEIGHT", "10.0"))
+# source_object scale factor on the DexCube (native edge ≈ 0.06 m). Default 0.267
+# → a ~16 mm die (the intended object). The old 0.05 gave a ~4 mm cube — too
+# small to grasp. Env-tunable: LEROBOT_ISAAC_OBJECT_SCALE.
+_OBJECT_SCALE = float(os.environ.get("LEROBOT_ISAAC_OBJECT_SCALE", "0.267"))
 _OBJECT_POS = (
     float(os.environ.get("LEROBOT_ISAAC_OBJECT_X", "0.22")),
     float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.05")),
@@ -236,7 +240,11 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                             "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
                             "/Assets/Isaac/4.0/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd"
                         ),
-                        scale=(0.05, 0.05, 0.05),
+                        # DexCube native edge ≈ 0.06 m. scale 0.05 gave a ~4 mm
+                        # cube (resting at z≈0.0015) — far too small to grasp.
+                        # Target a 16 mm die: scale = 0.016/0.06 ≈ 0.267.
+                        # Env-tunable: LEROBOT_ISAAC_OBJECT_SCALE (edge length in m).
+                        scale=(_OBJECT_SCALE,) * 3,
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
                         pos=_OBJECT_POS,  # was (0.5, 0.1, 0.05); now env-var-driven
