@@ -222,6 +222,15 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
         except AttributeError:
             pass
 
+        # Env-var stage override (DR level): 2=none, 3=object xy±2cm,
+        # 4=object xy±5cm + lighting + friction. LEROBOT_ISAAC_STAGE.
+        _stage_env = os.environ.get("LEROBOT_ISAAC_STAGE")
+        if _stage_env:
+            try:
+                self.stage = int(_stage_env)
+            except ValueError:
+                pass
+
         # Validate stage
         if self.stage not in (2, 3, 4):
             raise ValueError(
