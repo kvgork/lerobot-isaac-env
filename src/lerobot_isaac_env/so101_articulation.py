@@ -27,6 +27,7 @@ References
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -182,10 +183,18 @@ def build_articulation_cfg(
             )
         resolved_usd = str(usd_path)
 
+    # Anchor the arm to the world (table-mounted). The so101 USD imports as a
+    # FLOATING-base articulation (is_fixed_base=False), which (a) lets the arm
+    # drift/explode at num_envs>1 (PhysX instability → 1.7e12, blocks Fix 2) and
+    # (b) complicates IK (6 extra root DOFs in the jacobian). fix_root_link=True
+    # pins the root. Env-gated for reversibility (LEROBOT_ISAAC_FIX_BASE=0 to
+    # restore floating). See plans/2026-06-09-autonomous-fix-ledger.md.
+    _fix_base = os.environ.get("LEROBOT_ISAAC_FIX_BASE", "1") not in ("0", "", "false", "False")
     return ArticulationCfg(
         spawn=sim_utils.UsdFileCfg(
             usd_path=resolved_usd,
             activate_contact_sensors=False,
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(fix_root_link=_fix_base),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             # Default resting pose: all joints at 0 rad.
