@@ -245,21 +245,25 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
             # Spawn position is controlled by LEROBOT_ISAAC_OBJECT_X/Y/Z env vars
             # (default 0.5, 0.1, 0.05). Trial 6 uses (0.30, 0.05, 0.05).
             try:
+                # Die spawned as a PRIMITIVE cuboid -> a true PhysX BOX collider
+                # (perfectly solid, no mesh approximation). The DexCube USD's mesh
+                # collider let the gripper finger pass through the die; a box shape
+                # is reliably solid. Edge length keeps the OBJECT_SCALE semantics
+                # (DexCube native edge 0.06 m): scale 0.267 -> 16 mm die.
+                _edge = _OBJECT_SCALE * 0.06
                 self.scene.source_object = RigidObjectCfg(
                     prim_path="{ENV_REGEX_NS}/SourceObject",
-                    spawn=sim_utils.UsdFileCfg(
-                        usd_path=(
-                            "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
-                            "/Assets/Isaac/4.0/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd"
+                    spawn=sim_utils.CuboidCfg(
+                        size=(_edge, _edge, _edge),
+                        rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+                        mass_props=sim_utils.MassPropertiesCfg(mass=0.01),
+                        collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                        physics_material=sim_utils.RigidBodyMaterialCfg(
+                            static_friction=1.0, dynamic_friction=1.0,
                         ),
-                        # DexCube native edge ≈ 0.06 m. scale 0.05 gave a ~4 mm
-                        # cube (resting at z≈0.0015) — far too small to grasp.
-                        # Target a 16 mm die: scale = 0.016/0.06 ≈ 0.267.
-                        # Env-tunable: LEROBOT_ISAAC_OBJECT_SCALE (edge length in m).
-                        scale=(_OBJECT_SCALE,) * 3,
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
-                        pos=_OBJECT_POS,  # was (0.5, 0.1, 0.05); now env-var-driven
+                        pos=_OBJECT_POS,  # env-var-driven (LEROBOT_ISAAC_OBJECT_X/Y/Z)
                         rot=(1.0, 0.0, 0.0, 0.0),
                     ),
                 )
