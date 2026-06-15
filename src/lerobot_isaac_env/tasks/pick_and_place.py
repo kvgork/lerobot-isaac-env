@@ -448,6 +448,30 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                     "target_bin spawn failed: %s", exc
                 )
 
+            # SUCCESS = OBJECT placed in the bin (object xy within 6cm of target),
+            # NOT end-effector-to-object reach. The base SO101EnvCfg wires
+            # `success_termination` which fires on gripper-to-object distance < 5cm
+            # → the episode ends the instant the gripper REACHES the object, so the
+            # agent can never experience carry->place (ROOT CAUSE of every plateau,
+            # found 2026-06-15). Override with place_termination for pick-AND-place.
+            try:
+                from lerobot_isaac_env.terminations import place_termination as _place_term
+                from isaaclab.managers import TerminationTermCfg as _TermCfg  # type: ignore[import]
+                if self.terminations is not None and _place_term is not None:
+                    self.terminations.success = _TermCfg(
+                        func=_place_term,
+                        params={
+                            "target_pos": _TARGET_POS,
+                            "success_radius": 0.06,
+                            "object_name": "source_object",
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "place_termination wiring failed: %s", exc
+                )
+
 
 # ---------------------------------------------------------------------------
 # Named stage variants (convenience aliases)

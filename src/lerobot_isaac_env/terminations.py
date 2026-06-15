@@ -153,3 +153,30 @@ def success_termination(
         lifted = obj_pos[:, 2] > lift_threshold
         return (dist < threshold) & lifted
     return dist < threshold
+
+
+def place_termination(
+    env: ManagerBasedRLEnv,
+    target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
+    success_radius: float = 0.06,
+    object_name: str = "source_object",
+) -> torch.Tensor:
+    """Terminate (SUCCESS) when the OBJECT is placed in the target bin.
+
+    This is the correct pick-AND-PLACE success criterion: object xy within
+    ``success_radius`` of the target bin. The legacy ``success_termination``
+    fires on END-EFFECTOR-to-object distance (REACH), which ends the episode the
+    instant the gripper reaches the object — so the agent could never learn
+    carry->place (root cause of every plateau, found 2026-06-15). The object
+    spawns far from the bin, so this only fires after a real carry->place
+    (no reach false-positive). z is intentionally NOT gated: a placed die rests
+    in the bin at z~0.008, so a height gate would never fire on a real placement.
+
+    Returns (num_envs,) bool — True where the object is in the bin.
+    """
+    _require_isaaclab()
+    obj = env.scene[object_name]
+    obj_pos = obj.data.root_pos_w  # (N, 3)
+    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
+    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
+    return xy_dist < success_radius
