@@ -472,6 +472,42 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                     "place_termination wiring failed: %s", exc
                 )
 
+            # Reset the DIE to its spawn pose (+ jitter) every episode. The base
+            # EventCfg only resets the ROBOT joints — the object had NO reset event,
+            # so it was never reset between episodes (it persisted wherever it ended;
+            # the ACT eval showed ep N+1 starting at ep N's final die position). That
+            # makes the task inconsistent across episodes and is a contributor to the
+            # RL plateaus. ±3cm xy jitter doubles as domain randomization (matches the
+            # demo-gen jitter). source_object is a RigidObjectCfg → resettable.
+            try:
+                from isaaclab.managers import SceneEntityCfg as _SEC  # type: ignore[import]
+                from isaaclab.managers import EventTermCfg as _EvtCfg  # type: ignore[import]
+                if getattr(self, "events", None) is not None:
+                    self.events.reset_object = _EvtCfg(
+                        func=_mdp.reset_root_state_uniform,
+                        mode="reset",
+                        params={
+                            "pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
+                            "velocity_range": {},
+                            "asset_cfg": _SEC("source_object"),
+                        },
+                    )
+                    # ALSO reset the ROBOT to its rest pose each episode. _events_for_stage
+                    # returns the scaffold SO101EventsCfg (0 real events), so WITHOUT this
+                    # the robot ALSO never reset between episodes (EventManager had 0 terms;
+                    # the ACT trace showed the arm persisting from the prior episode's end).
+                    # A non-resetting scene makes the task non-episodic → breaks RL.
+                    self.events.reset_robot_joints = _EvtCfg(
+                        func=_mdp.reset_joints_by_scale,
+                        mode="reset",
+                        params={"position_range": (-0.1, 0.1), "velocity_range": (0.0, 0.0)},
+                    )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "object reset event wiring failed: %s", exc
+                )
+
 
 # ---------------------------------------------------------------------------
 # Named stage variants (convenience aliases)
