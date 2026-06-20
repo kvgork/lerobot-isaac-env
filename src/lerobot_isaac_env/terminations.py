@@ -19,6 +19,11 @@ Termination conditions
     above a minimum height before the distance gate fires (useful for
     pick-and-lift tasks).
 
+``place_termination``:
+    Object XY within ``success_radius`` of the target bin.  Delegates to
+    :func:`~lerobot_isaac_env.outcome_verifier.object_in_bin` — the canonical
+    RLVR predicate shared by sim eval and the future hardware reader.
+
 References
 ----------
 - Isaac Lab termination manager:
@@ -30,6 +35,9 @@ References
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+# outcome_verifier is pure numpy — safe to import unconditionally.
+from lerobot_isaac_env.outcome_verifier import object_in_bin
 
 try:
     import torch
@@ -163,20 +171,30 @@ def place_termination(
 ) -> torch.Tensor:
     """Terminate (SUCCESS) when the OBJECT is placed in the target bin.
 
-    This is the correct pick-AND-PLACE success criterion: object xy within
-    ``success_radius`` of the target bin. The legacy ``success_termination``
+    This is the correct pick-AND-PLACE success criterion: object XY within
+    ``success_radius`` of the target bin.  The legacy ``success_termination``
     fires on END-EFFECTOR-to-object distance (REACH), which ends the episode the
     instant the gripper reaches the object — so the agent could never learn
-    carry->place (root cause of every plateau, found 2026-06-15). The object
+    carry->place (root cause of every plateau, found 2026-06-15).  The object
     spawns far from the bin, so this only fires after a real carry->place
-    (no reach false-positive). z is intentionally NOT gated: a placed die rests
+    (no reach false-positive).  z is intentionally NOT gated: a placed die rests
     in the bin at z~0.008, so a height gate would never fire on a real placement.
 
-    Returns (num_envs,) bool — True where the object is in the bin.
+    Delegates to :func:`~lerobot_isaac_env.outcome_verifier.object_in_bin` — the
+    canonical RLVR predicate shared by sim eval and the future hardware reader.
+    Behaviour is identical to the pre-refactor inline computation (xy-distance <
+    success_radius); the only change is that the comparison now goes through the
+    shared, unit-tested predicate rather than an inline ``torch.norm``.
+
+    Returns ``(num_envs,)`` bool — True where the object is in the bin.
     """
     _require_isaaclab()
     obj = env.scene[object_name]
-    obj_pos = obj.data.root_pos_w  # (N, 3)
-    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
-    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
-    return xy_dist < success_radius
+    obj_pos = obj.data.root_pos_w  # (N, 3) torch tensor on GPU
+
+    # Convert to CPU numpy for the canonical predicate (N is tiny: ≤8 envs,
+    # so the round-trip is negligible).
+    obj_pos_np = obj_pos.cpu().numpy()  # (N, 3)
+    result_np = object_in_bin(obj_pos_np, target_pos, success_radius)  # (N,) bool
+
+    return torch.as_tensor(result_np, device=obj_pos.device)
