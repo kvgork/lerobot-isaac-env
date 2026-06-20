@@ -462,7 +462,13 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         func=_place_term,
                         params={
                             "target_pos": _TARGET_POS,
-                            "success_radius": 0.06,
+                            # 0.06 + ±3cm reset jitter spawned the die ALREADY in-bin
+                            # ~31% of episodes at the gentle curriculum stages (s1 6.6cm,
+                            # s2 9cm) → free 2-step "successes", agent never learns
+                            # carry→place (vet 2026-06-20). 0.04 + ±1.5cm jitter →
+                            # P(spawn-in-bin)≈0 across the whole 6→18cm curriculum
+                            # (Monte-Carlo verified), still achievable for the 16mm die.
+                            "success_radius": 0.04,
                             "object_name": "source_object",
                         },
                     )
@@ -477,8 +483,11 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
             # so it was never reset between episodes (it persisted wherever it ended;
             # the ACT eval showed ep N+1 starting at ep N's final die position). That
             # makes the task inconsistent across episodes and is a contributor to the
-            # RL plateaus. ±3cm xy jitter doubles as domain randomization (matches the
-            # demo-gen jitter). source_object is a RigidObjectCfg → resettable.
+            # RL plateaus. ±1.5cm xy jitter (was ±3cm) doubles as light domain
+            # randomization. Tightened together with success_radius 0.06→0.04 so the die
+            # never spawns inside the success bin at the gentle curriculum stages — the
+            # ±3cm box reached within 2.5cm of a 6cm bin at 6.6cm nominal (vet 2026-06-20).
+            # source_object is a RigidObjectCfg → resettable.
             try:
                 from isaaclab.managers import SceneEntityCfg as _SEC  # type: ignore[import]
                 from isaaclab.managers import EventTermCfg as _EvtCfg  # type: ignore[import]
@@ -487,7 +496,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         func=_mdp.reset_root_state_uniform,
                         mode="reset",
                         params={
-                            "pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
+                            "pose_range": {"x": (-0.015, 0.015), "y": (-0.015, 0.015)},
                             "velocity_range": {},
                             "asset_cfg": _SEC("source_object"),
                         },
