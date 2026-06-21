@@ -20,9 +20,12 @@ Termination conditions
     pick-and-lift tasks).
 
 ``place_termination``:
-    Object XY within ``success_radius`` of the target bin.  Delegates to
-    :func:`~lerobot_isaac_env.outcome_verifier.object_in_bin` — the canonical
-    RLVR predicate shared by sim eval and the future hardware reader.
+    Object XY within ``success_radius`` of the target bin AND (by default)
+    the object was lifted above ``rest_height + lift_margin`` — i.e., it was
+    carried, not slid.  Delegates to
+    :func:`~lerobot_isaac_env.outcome_verifier.object_in_bin` for the XY
+    predicate.  The lift gate is controlled by ``LEROBOT_ISAAC_PLACE_REQUIRE_LIFT``
+    (default "1" = require lift; "0" = XY-only for back-compat).
 
 References
 ----------
@@ -34,6 +37,7 @@ References
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 # outcome_verifier is pure numpy — safe to import unconditionally.
@@ -62,6 +66,14 @@ if TYPE_CHECKING:
         from isaaclab.envs import ManagerBasedRLEnv  # type: ignore[import]
     except ImportError:
         pass
+
+# ---------------------------------------------------------------------------
+# Module-level env var: LEROBOT_ISAAC_PLACE_REQUIRE_LIFT
+#   "1" (default) — place_termination requires a lift gate (kills slide shortcut)
+#   "0" / "" / "false" / "False" — XY-only (legacy back-compat)
+# ---------------------------------------------------------------------------
+_raw_require_lift = os.environ.get("LEROBOT_ISAAC_PLACE_REQUIRE_LIFT", "1")
+_PLACE_REQUIRE_LIFT: bool = _raw_require_lift not in ("0", "", "false", "False")
 
 
 def _require_isaaclab() -> None:
@@ -168,25 +180,58 @@ def place_termination(
     target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
     success_radius: float = 0.06,
     object_name: str = "source_object",
+    rest_height: float = 0.05,
+    lift_margin: float = 0.02,
 ) -> torch.Tensor:
     """Terminate (SUCCESS) when the OBJECT is placed in the target bin.
 
-    This is the correct pick-AND-PLACE success criterion: object XY within
-    ``success_radius`` of the target bin.  The legacy ``success_termination``
-    fires on END-EFFECTOR-to-object distance (REACH), which ends the episode the
-    instant the gripper reaches the object — so the agent could never learn
-    carry->place (root cause of every plateau, found 2026-06-15).  The object
-    spawns far from the bin, so this only fires after a real carry->place
-    (no reach false-positive).  z is intentionally NOT gated: a placed die rests
-    in the bin at z~0.008, so a height gate would never fire on a real placement.
+    Success criterion: object XY within ``success_radius`` of the target bin
+    AND (when ``LEROBOT_ISAAC_PLACE_REQUIRE_LIFT=1``, the default) the object
+    was lifted above ``rest_height + lift_margin`` — meaning it was *carried*,
+    not slid.
 
-    Delegates to :func:`~lerobot_isaac_env.outcome_verifier.object_in_bin` — the
-    canonical RLVR predicate shared by sim eval and the future hardware reader.
-    Behaviour is identical to the pre-refactor inline computation (xy-distance <
-    success_radius); the only change is that the comparison now goes through the
-    shared, unit-tested predicate rather than an inline ``torch.norm``.
+    WHY the lift gate: without it, the agent earns place_termination by sliding
+    the die along the table into the bin.  Sliding never triggers
+    ``place_success_reward`` (which already gates on the same lift condition), so
+    the +50 bonus is never seen → placing behaviour is not retained.  Requiring
+    the lift here aligns termination with the reward: both fire only on a real
+    carry-and-place, giving a salient terminal signal that reinforces the full
+    grasp→lift→carry→place chain.
 
-    Returns ``(num_envs,)`` bool — True where the object is in the bin.
+    The XY predicate is still delegated to
+    :func:`~lerobot_isaac_env.outcome_verifier.object_in_bin` — the canonical
+    RLVR predicate shared by sim eval and the future hardware reader.
+    ``object_in_bin`` stays XY-only (no lift) — the lift gate is a
+    training/termination concern, not the outcome anchor.
+
+    Parameters
+    ----------
+    env:
+        Isaac Lab ``ManagerBasedRLEnv`` instance.
+    target_pos:
+        World-frame (x, y, z) of the bin centre.
+    success_radius:
+        XY radius of the bin in metres.
+    object_name:
+        Scene entity key for the manipulation object.
+    rest_height:
+        Z height (world frame, metres) of the object at rest on the table.
+        Same default as ``place_success_reward``.  Default: 0.05.
+    lift_margin:
+        Additional margin above ``rest_height`` required for the "lifted"
+        gate.  Same default as ``place_success_reward``.  Default: 0.02.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_envs,)`` bool — True where the object is placed (and
+        lifted, unless ``LEROBOT_ISAAC_PLACE_REQUIRE_LIFT=0``).
+
+    Environment variable
+    --------------------
+    LEROBOT_ISAAC_PLACE_REQUIRE_LIFT (default "1"):
+        "1" — require lift (kills slide shortcut; matches place_success_reward).
+        "0" / "" / "false" / "False" — XY-only (legacy back-compat).
     """
     _require_isaaclab()
     obj = env.scene[object_name]
@@ -197,4 +242,11 @@ def place_termination(
     obj_pos_np = obj_pos.cpu().numpy()  # (N, 3)
     result_np = object_in_bin(obj_pos_np, target_pos, success_radius)  # (N,) bool
 
-    return torch.as_tensor(result_np, device=obj_pos.device)
+    in_bin = torch.as_tensor(result_np, device=obj_pos.device)  # (N,) bool
+
+    if _PLACE_REQUIRE_LIFT:
+        # Mirror place_success_reward: was_lifted = obj_pos[:, 2] > (rest_height + lift_margin)
+        was_lifted = obj_pos[:, 2] > (rest_height + lift_margin)  # (N,) bool
+        return in_bin & was_lifted
+
+    return in_bin
