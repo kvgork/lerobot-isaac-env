@@ -99,6 +99,10 @@ _GRASP_STD = float(os.environ.get("LEROBOT_ISAAC_GRASP_STD", "0.04"))
 # so the agent learns grip+lift BEFORE carry+place is introduced.
 # Use: train with GRASP_STAGE=1 until high success rate, then switch to "0".
 _GRASP_STAGE: bool = os.environ.get("LEROBOT_ISAAC_GRASP_STAGE", "0") not in ("0", "", "false", "False")
+# Consecutive steps the object must stay lifted for lift_termination to fire SUCCESS
+# (grasp stage). Default 10. Lower (e.g. 3) makes a brief lift count — useful when the
+# agent grips+lifts but can't yet HOLD 10 steps, so the success signal is learnable.
+_LIFT_HOLD_STEPS: int = int(os.environ.get("LEROBOT_ISAAC_LIFT_HOLD_STEPS", "10"))
 
 from dataclasses import dataclass
 
@@ -482,7 +486,7 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                                 "object_name": "source_object",
                                 "rest_height": float(_OBJECT_POS[2]),
                                 "lift_margin": 0.02,
-                                "hold_steps": 10,
+                                "hold_steps": _LIFT_HOLD_STEPS,
                             },
                         )
                     else:
