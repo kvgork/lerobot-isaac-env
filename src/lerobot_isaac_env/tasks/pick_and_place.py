@@ -94,6 +94,11 @@ _PLACE_STD = float(os.environ.get("LEROBOT_ISAAC_PLACE_STD", "0.05"))
 # 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
 # 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
 _GRASP_STD = float(os.environ.get("LEROBOT_ISAAC_GRASP_STD", "0.04"))
+# GRASP-FIRST sub-curriculum stage.  "0" (default) = normal carry-place behaviour
+# (place_termination).  "1" = SUCCESS = object lifted-and-held (lift_termination),
+# so the agent learns grip+lift BEFORE carry+place is introduced.
+# Use: train with GRASP_STAGE=1 until high success rate, then switch to "0".
+_GRASP_STAGE: bool = os.environ.get("LEROBOT_ISAAC_GRASP_STAGE", "0") not in ("0", "", "false", "False")
 
 from dataclasses import dataclass
 
@@ -448,34 +453,60 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                     "target_bin spawn failed: %s", exc
                 )
 
-            # SUCCESS = OBJECT placed in the bin (object xy within 6cm of target),
-            # NOT end-effector-to-object reach. The base SO101EnvCfg wires
-            # `success_termination` which fires on gripper-to-object distance < 5cm
-            # → the episode ends the instant the gripper REACHES the object, so the
-            # agent can never experience carry->place (ROOT CAUSE of every plateau,
-            # found 2026-06-15). Override with place_termination for pick-AND-place.
+            # SUCCESS termination — gated by LEROBOT_ISAAC_GRASP_STAGE:
+            #
+            # GRASP_STAGE=0 (default): place_termination — object XY within
+            #   success_radius of the target bin AND lifted (full carry-place).
+            #   This is the normal carry-place curriculum; behaviour UNCHANGED
+            #   from before this feature was added.
+            #
+            # GRASP_STAGE=1: lift_termination — object held above lift threshold
+            #   for hold_steps consecutive steps.  Used for the GRASP-FIRST
+            #   sub-curriculum: teach grip+lift before carry+place.  The grasp
+            #   and lift reward terms (already active when STAGED_REWARD=1)
+            #   provide the dense signal; the carry/place reward terms can stay
+            #   wired but do not gate success in this mode.
+            #
+            # The base SO101EnvCfg wires `success_termination` (EE-to-object
+            # distance) which fires on REACH — overriding below in both cases.
             try:
-                from lerobot_isaac_env.terminations import place_termination as _place_term
                 from isaaclab.managers import TerminationTermCfg as _TermCfg  # type: ignore[import]
-                if self.terminations is not None and _place_term is not None:
-                    self.terminations.success = _TermCfg(
-                        func=_place_term,
-                        params={
-                            "target_pos": _TARGET_POS,
-                            # 0.06 + ±3cm reset jitter spawned the die ALREADY in-bin
-                            # ~31% of episodes at the gentle curriculum stages (s1 6.6cm,
-                            # s2 9cm) → free 2-step "successes", agent never learns
-                            # carry→place (vet 2026-06-20). 0.04 + ±1.5cm jitter →
-                            # P(spawn-in-bin)≈0 across the whole 6→18cm curriculum
-                            # (Monte-Carlo verified), still achievable for the 16mm die.
-                            "success_radius": 0.04,
-                            "object_name": "source_object",
-                        },
-                    )
+                if self.terminations is not None:
+                    if _GRASP_STAGE:
+                        from lerobot_isaac_env.terminations import (
+                            lift_termination as _lift_term,
+                        )
+                        self.terminations.success = _TermCfg(
+                            func=_lift_term,
+                            params={
+                                "object_name": "source_object",
+                                "rest_height": float(_OBJECT_POS[2]),
+                                "lift_margin": 0.02,
+                                "hold_steps": 10,
+                            },
+                        )
+                    else:
+                        from lerobot_isaac_env.terminations import (
+                            place_termination as _place_term,
+                        )
+                        self.terminations.success = _TermCfg(
+                            func=_place_term,
+                            params={
+                                "target_pos": _TARGET_POS,
+                                # 0.06 + ±3cm reset jitter spawned the die ALREADY in-bin
+                                # ~31% of episodes at the gentle curriculum stages (s1 6.6cm,
+                                # s2 9cm) → free 2-step "successes", agent never learns
+                                # carry→place (vet 2026-06-20). 0.04 + ±1.5cm jitter →
+                                # P(spawn-in-bin)≈0 across the whole 6→18cm curriculum
+                                # (Monte-Carlo verified), still achievable for the 16mm die.
+                                "success_radius": 0.04,
+                                "object_name": "source_object",
+                            },
+                        )
             except Exception as exc:  # noqa: BLE001
                 import logging
                 logging.getLogger(__name__).warning(
-                    "place_termination wiring failed: %s", exc
+                    "termination wiring failed: %s", exc
                 )
 
             # Reset the DIE to its spawn pose (+ jitter) every episode. The base

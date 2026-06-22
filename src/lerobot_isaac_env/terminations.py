@@ -27,6 +27,14 @@ Termination conditions
     predicate.  The lift gate is controlled by ``LEROBOT_ISAAC_PLACE_REQUIRE_LIFT``
     (default "1" = require lift; "0" = XY-only for back-compat).
 
+``lift_termination``:
+    SUCCESS when the object is lifted above ``rest_height + lift_margin`` and
+    held there for ``hold_steps`` consecutive steps.  Used by the
+    GRASP-FIRST sub-curriculum stage (``LEROBOT_ISAAC_GRASP_STAGE=1``) to
+    decompose the grasp→lift→carry→place chain: the agent first learns to
+    grip-and-lift (easy, dense reward already present), then a subsequent
+    stage adds carry+place from the grasp checkpoint.
+
 References
 ----------
 - Isaac Lab termination manager:
@@ -250,3 +258,88 @@ def place_termination(
         return in_bin & was_lifted
 
     return in_bin
+
+
+def lift_termination(
+    env: ManagerBasedRLEnv,
+    object_name: str = "source_object",
+    rest_height: float = 0.05,
+    lift_margin: float = 0.02,
+    hold_steps: int = 10,
+) -> torch.Tensor:
+    """Terminate (SUCCESS) when the object is lifted and held above the table.
+
+    GRASP-FIRST sub-curriculum termination: fires SUCCESS when the object has
+    been raised above ``rest_height + lift_margin`` for ``hold_steps``
+    consecutive steps.  Used when ``LEROBOT_ISAAC_GRASP_STAGE=1`` to
+    decompose the grasp→lift→carry→place chain — the agent must learn
+    grip-and-lift first, then a subsequent stage (with ``place_termination``)
+    adds carry+place from the grasp checkpoint.
+
+    The ``hold_steps`` counter prevents a momentary upward bump from counting
+    as success: the object must be held above the lift threshold continuously.
+    Per-env consecutive-lifted counts are stored on the env instance as
+    ``env._lift_hold_count`` (a ``torch.Tensor`` of shape ``(num_envs,)``).
+    The attribute is created on first call and reset to zero for any env where
+    the object drops below the threshold.
+
+    Parameters
+    ----------
+    env:
+        Isaac Lab ``ManagerBasedRLEnv`` instance.
+    object_name:
+        Scene entity key for the manipulation object.  Default: ``source_object``.
+    rest_height:
+        Z height (world frame, metres) of the object when resting on the table.
+        Default: 0.05 (matches ``place_termination`` and ``lift_shaping_reward``).
+    lift_margin:
+        Additional margin above ``rest_height`` required for "lifted" to be True.
+        Default: 0.02.  Lift threshold = ``rest_height + lift_margin`` = 0.07 m.
+    hold_steps:
+        Number of consecutive steps the object must be above the lift threshold
+        before SUCCESS fires.  Default: 10.  Set to 1 for per-step success
+        (momentary lift counts).
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_envs,)`` bool — True for envs where the object has been
+        held above the lift threshold for ``hold_steps`` consecutive steps.
+
+    Notes
+    -----
+    The per-env counter ``env._lift_hold_count`` is a CPU/GPU tensor matching
+    the device of ``root_pos_w``.  It persists across steps within an episode
+    and is reset by Isaac Lab's episode reset (the env itself resets the object
+    position, which drops the object below the threshold on the first step of
+    the new episode, resetting the counter to zero).  If the attribute is
+    missing for any reason (e.g. a mock env in tests that doesn't pre-create
+    it), it is created safely on first call.
+    """
+    _require_isaaclab()
+
+    obj = env.scene[object_name]
+    obj_pos = obj.data.root_pos_w  # (N, 3) torch tensor
+
+    num_envs = obj_pos.shape[0]
+    device = obj_pos.device
+
+    # --- Per-env consecutive-lifted counter ---
+    # Initialise on first call or if num_envs changed (e.g. after a re-spawn).
+    existing = getattr(env, "_lift_hold_count", None)
+    if existing is None or existing.shape[0] != num_envs or existing.device != device:
+        env._lift_hold_count = torch.zeros(num_envs, dtype=torch.long, device=device)
+
+    # Boolean mask: which envs currently have the object above the threshold.
+    lift_threshold = rest_height + lift_margin
+    currently_lifted = obj_pos[:, 2] > lift_threshold  # (N,) bool
+
+    # Increment counter where lifted, reset to 0 where not lifted.
+    env._lift_hold_count = torch.where(
+        currently_lifted,
+        env._lift_hold_count + 1,
+        torch.zeros_like(env._lift_hold_count),
+    )
+
+    # Success fires when the counter reaches hold_steps.
+    return env._lift_hold_count >= hold_steps
