@@ -260,15 +260,24 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                 # is reliably solid. Edge length keeps the OBJECT_SCALE semantics
                 # (DexCube native edge 0.06 m): scale 0.267 -> 16 mm die.
                 _edge = _OBJECT_SCALE * 0.06
+                # Grip firmness (2026-06-23): the scripted grasp lifts the die only ~2cm
+                # then SLIPS (closed grip at the -0.175 joint limit is loose). Raise die
+                # friction + solver iterations + tight collision offsets so the grasp HOLDS
+                # for a sustained lift. Friction env-tunable for probe sweeps.
+                _obj_friction = float(os.environ.get("LEROBOT_ISAAC_OBJECT_FRICTION", "3.0"))
                 self.scene.source_object = RigidObjectCfg(
                     prim_path="{ENV_REGEX_NS}/SourceObject",
                     spawn=sim_utils.CuboidCfg(
                         size=(_edge, _edge, _edge),
-                        rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+                        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                            solver_position_iteration_count=32,
+                        ),
                         mass_props=sim_utils.MassPropertiesCfg(mass=0.01),
-                        collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                        collision_props=sim_utils.CollisionPropertiesCfg(
+                            collision_enabled=True, contact_offset=0.004, rest_offset=0.0,
+                        ),
                         physics_material=sim_utils.RigidBodyMaterialCfg(
-                            static_friction=1.0, dynamic_friction=1.0,
+                            static_friction=_obj_friction, dynamic_friction=_obj_friction,
                         ),
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
