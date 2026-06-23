@@ -83,6 +83,24 @@ if TYPE_CHECKING:
 _raw_require_lift = os.environ.get("LEROBOT_ISAAC_PLACE_REQUIRE_LIFT", "1")
 _PLACE_REQUIRE_LIFT: bool = _raw_require_lift not in ("0", "", "false", "False")
 
+# ---------------------------------------------------------------------------
+# REAL-PLACE gates (2026-06-23): "place" must mean the object was LOWERED into the
+# bin and RELEASED — not merely carried over it while held aloft.  Validation vs the
+# recorded human demos showed the env's old place success fired at "die-over-bin +
+# lifted" (carry step ~3, before any descend/release), so demos + RL never learned to
+# place/release (gripper stayed closed). These gates require the die to be RESTING low
+# (lowered in) AND the gripper OPEN (released).  Both default-on; tunable / disablable.
+#   LEROBOT_ISAAC_PLACE_REST_Z       (default 0.04): die_z below this = resting in bin
+#                                     (rest ~0.013, carried-aloft ~0.072 — 0.04 separates them).
+#   LEROBOT_ISAAC_PLACE_REQUIRE_RELEASE (default "1"): also require the gripper open.
+#   LEROBOT_ISAAC_GRIPPER_OPEN_THRESH (default 0.0): gripper joint pos above this = open
+#                                     (closed ≈ -0.175, open ≈ +0.5 — 0.0 is the midpoint).
+# ---------------------------------------------------------------------------
+_PLACE_REST_Z: float = float(os.environ.get("LEROBOT_ISAAC_PLACE_REST_Z", "0.04"))
+_raw_require_release = os.environ.get("LEROBOT_ISAAC_PLACE_REQUIRE_RELEASE", "1")
+_PLACE_REQUIRE_RELEASE: bool = _raw_require_release not in ("0", "", "false", "False")
+_GRIPPER_OPEN_THRESH: float = float(os.environ.get("LEROBOT_ISAAC_GRIPPER_OPEN_THRESH", "0.0"))
+
 
 def _require_isaaclab() -> None:
     if not _ISAACLAB_AVAILABLE:
@@ -90,6 +108,83 @@ def _require_isaaclab() -> None:
             "Isaac Lab is required for termination term functions. "
             "Install Isaac Lab via scripts/install_isaac_lab.sh."
         )
+
+
+def latch_ever_lifted(env, obj_pos, lift_threshold: float):
+    """Per-env LATCH: True once the object exceeded ``lift_threshold`` at ANY step
+    this episode (resets on episode boundary). Shared by ``place_termination`` and
+    ``place_success_reward``.
+
+    WHY a latch (the 2026-06-23 fix): both place predicates previously used an
+    *instantaneous* ``was_lifted = obj_z > rest+margin`` AND-ed with in-bin-XY. But a
+    PLACED die rests on the bin floor at z≈0.01 (verified: scripts/_probe_carry_mechanism.py
+    FINAL die_z 0.010–0.018), and a LIFTED die is in the air, NOT in-bin — the two
+    conditions almost never co-occur (only a knife-edge frame while carrying over the bin
+    at z≈0.072, which oscillates around the 0.07 threshold). So place_termination / the +50
+    place_success_reward almost never fired even on a genuine carry-and-place. A die that
+    was lifted at some point and ends in the bin WAS carried (a pure slide never lifts), so
+    the correct gate is "ever lifted this episode AND now in bin". This is also what the
+    docstrings always *intended* ("was lifted… carried, not slid" — past tense).
+
+    Reset is detected by ``episode_length_buf`` DECREASING (Isaac resets it to 0 on episode
+    reset) — robust to the exact step at which the term is evaluated. The latch and the
+    previous-step buffer are stored on the env instance; ``place_termination`` and
+    ``place_success_reward`` both call this every step and OR-in the current lift, so the
+    double call within a step is idempotent.
+    """
+    num_envs = obj_pos.shape[0]
+    device = obj_pos.device
+    latch = getattr(env, "_place_ever_lifted", None)
+    if latch is None or latch.shape[0] != num_envs or latch.device != device:
+        latch = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    elb = getattr(env, "episode_length_buf", None)
+    prev = getattr(env, "_place_prev_elb", None)
+    if elb is not None:
+        if prev is None or prev.shape != elb.shape or prev.device != elb.device:
+            reset_mask = torch.ones(num_envs, dtype=torch.bool, device=device)
+        else:
+            reset_mask = elb < prev  # episode_length_buf went down => episode reset
+        env._place_prev_elb = elb.clone()
+        latch = torch.where(reset_mask, torch.zeros_like(latch), latch)
+    currently_lifted = obj_pos[:, 2] > lift_threshold
+    latch = latch | currently_lifted
+    env._place_ever_lifted = latch
+    return latch
+
+
+def _gripper_open(env, robot_name: str = "robot"):
+    """(num_envs,) bool — True where the gripper joint is OPEN (released).
+    Closed ≈ -0.175 rad, open ≈ +0.5; threshold ``_GRIPPER_OPEN_THRESH`` (default 0.0)."""
+    robot = env.scene[robot_name]
+    gi = getattr(env, "_gripper_jidx", None)
+    if gi is None:
+        gi = int(robot.find_joints("gripper")[0][0])
+        env._gripper_jidx = gi
+    return robot.data.joint_pos[:, gi] > _GRIPPER_OPEN_THRESH
+
+
+def is_placed(env, obj_pos, target_pos, success_radius, rest_height, lift_margin):
+    """REAL-PLACE predicate shared by ``place_termination`` and ``place_success_reward``.
+
+    Object XY within ``success_radius`` of the bin (canonical ``object_in_bin`` anchor) AND,
+    when ``LEROBOT_ISAAC_PLACE_REQUIRE_LIFT`` (default), it was LIFTED at some point this
+    episode (latch — kills the slide shortcut) AND is now RESTING low in the bin
+    (``obj_z < _PLACE_REST_Z`` — lowered in, not carried aloft) AND, when
+    ``LEROBOT_ISAAC_PLACE_REQUIRE_RELEASE`` (default), the gripper is OPEN (released).
+
+    This is the 2026-06-23 fix: the old predicate (in_bin & instantaneous-lifted) fired the
+    moment the held die crossed the bin XY while aloft — so "place" never required lowering or
+    releasing.  The full predicate makes success = a true carry-lower-release.
+    """
+    obj_pos_np = obj_pos.cpu().numpy()
+    in_bin = torch.as_tensor(object_in_bin(obj_pos_np, target_pos, success_radius), device=obj_pos.device)
+    if not _PLACE_REQUIRE_LIFT:
+        return in_bin
+    placed = in_bin & latch_ever_lifted(env, obj_pos, rest_height + lift_margin)
+    placed = placed & (obj_pos[:, 2] < _PLACE_REST_Z)  # lowered into the bin, not held aloft
+    if _PLACE_REQUIRE_RELEASE:
+        placed = placed & _gripper_open(env)
+    return placed
 
 
 # ---------------------------------------------------------------------------
@@ -244,20 +339,10 @@ def place_termination(
     _require_isaaclab()
     obj = env.scene[object_name]
     obj_pos = obj.data.root_pos_w  # (N, 3) torch tensor on GPU
-
-    # Convert to CPU numpy for the canonical predicate (N is tiny: ≤8 envs,
-    # so the round-trip is negligible).
-    obj_pos_np = obj_pos.cpu().numpy()  # (N, 3)
-    result_np = object_in_bin(obj_pos_np, target_pos, success_radius)  # (N,) bool
-
-    in_bin = torch.as_tensor(result_np, device=obj_pos.device)  # (N,) bool
-
-    if _PLACE_REQUIRE_LIFT:
-        # Mirror place_success_reward: was_lifted = obj_pos[:, 2] > (rest_height + lift_margin)
-        was_lifted = obj_pos[:, 2] > (rest_height + lift_margin)  # (N,) bool
-        return in_bin & was_lifted
-
-    return in_bin
+    # REAL-PLACE predicate (2026-06-23): in-bin XY AND lifted-latch AND resting-low AND
+    # gripper-released. See is_placed() — replaces the old in_bin & instantaneous-lifted that
+    # fired while the die was still carried aloft over the bin (no lower/release required).
+    return is_placed(env, obj_pos, target_pos, success_radius, rest_height, lift_margin)
 
 
 def lift_termination(

@@ -466,6 +466,46 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                     "target_bin spawn failed: %s", exc
                 )
 
+            # CUP WALLS (2026-06-23): the real place target is a ~9 cm cup with WALLS — a die
+            # released near centre is contained by the walls.  The flat marker above has no walls,
+            # so the scripted release (which ejects the die ~5 cm forward) overshoots the rim by
+            # ~0.7 cm with nothing to stop it.  Add 4 STATIC collidable walls forming a 9 cm well
+            # so the slight overshoot is caught — matching reality and making the place succeed.
+            # STATIC collider (AssetBaseCfg + collision_props), NOT a kinematic RigidObjectCfg
+            # (which hangs sim.reset per the marker comment above).  Toggle: LEROBOT_ISAAC_PLACE_CUP.
+            if os.environ.get("LEROBOT_ISAAC_PLACE_CUP", "1") not in ("0", "", "false", "False"):
+                try:
+                    _cx, _cy = float(_TARGET_POS[0]), float(_TARGET_POS[1])
+                    _inner = float(os.environ.get("LEROBOT_ISAAC_PLACE_CUP_RADIUS", "0.045"))  # 9 cm cup
+                    _wt = 0.008      # wall thickness
+                    _wh = float(os.environ.get("LEROBOT_ISAAC_PLACE_CUP_HEIGHT", "0.07"))  # ~7 cm cup (real)
+                    _wl = 2.0 * _inner + 2.0 * _wt  # wall length (corners overlap)
+                    _wall_mat = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
+                    _walls = {
+                        "CupWallXp": ((_cx + _inner + _wt / 2, _cy, _wh / 2), (_wt, _wl, _wh)),
+                        "CupWallXn": ((_cx - _inner - _wt / 2, _cy, _wh / 2), (_wt, _wl, _wh)),
+                        "CupWallYp": ((_cx, _cy + _inner + _wt / 2, _wh / 2), (_wl, _wt, _wh)),
+                        "CupWallYn": ((_cx, _cy - _inner - _wt / 2, _wh / 2), (_wl, _wt, _wh)),
+                    }
+                    for _name, (_pos, _size) in _walls.items():
+                        setattr(
+                            self.scene, _name,
+                            AssetBaseCfg(
+                                prim_path="{ENV_REGEX_NS}/" + _name,
+                                spawn=sim_utils.CuboidCfg(
+                                    size=_size,
+                                    collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                                    physics_material=_wall_mat,
+                                ),
+                                init_state=AssetBaseCfg.InitialStateCfg(
+                                    pos=_pos, rot=(1.0, 0.0, 0.0, 0.0),
+                                ),
+                            ),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning("cup walls spawn failed: %s", exc)
+
             # SUCCESS termination — gated by LEROBOT_ISAAC_GRASP_STAGE:
             #
             # GRASP_STAGE=0 (default): place_termination — object XY within
@@ -506,13 +546,14 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                             func=_place_term,
                             params={
                                 "target_pos": _TARGET_POS,
-                                # 0.06 + ±3cm reset jitter spawned the die ALREADY in-bin
-                                # ~31% of episodes at the gentle curriculum stages (s1 6.6cm,
-                                # s2 9cm) → free 2-step "successes", agent never learns
-                                # carry→place (vet 2026-06-20). 0.04 + ±1.5cm jitter →
-                                # P(spawn-in-bin)≈0 across the whole 6→18cm curriculum
-                                # (Monte-Carlo verified), still achievable for the 16mm die.
-                                "success_radius": 0.04,
+                                # success_radius default 0.05 (2026-06-23): matches the ~9 cm
+                                # cup (inner radius 0.045) now modelled with WALLS — a die
+                                # contained against a wall rests ~0.037-0.046 from centre, so
+                                # 0.04 was too tight (rejected genuine in-cup places). Spawn is
+                                # ≥0.18 m away so P(spawn-in-bin)≈0 even at 0.05. Env-tunable.
+                                # (Historic note: was 0.04, tightened from 0.06 pre-cup to kill
+                                # spawn-in-bin free successes at near-bin curriculum stages.)
+                                "success_radius": float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_RADIUS", "0.05")),
                                 "object_name": "source_object",
                             },
                         )

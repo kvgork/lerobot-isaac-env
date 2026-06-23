@@ -441,13 +441,13 @@ def place_success_reward(
         object_cfg = SceneEntityCfg("source_object")
     obj = env.scene[object_cfg.name]
     obj_pos = obj.data.root_pos_w  # (N, 3)
-    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
-    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
-    at_target = xy_dist < success_radius
-    # Require the object to have been lifted (off its rest height) — a placed
-    # object sits near the bin top, above the table rest height.
-    was_lifted = obj_pos[:, 2] > (rest_height + lift_margin)
-    placed = (at_target & was_lifted).to(obj_pos.dtype)
+    # REAL-PLACE predicate (2026-06-23): in-bin XY AND lifted-latch AND resting-low AND
+    # gripper-released — identical to place_termination via the shared is_placed(). The old
+    # instantaneous (at_target & obj_z>thr) fired only while the die was carried aloft over the
+    # bin, so this +50 bonus nearly never paid and never rewarded an actual lower-and-release.
+    from lerobot_isaac_env.terminations import is_placed
+
+    placed = is_placed(env, obj_pos, target_pos, success_radius, rest_height, lift_margin).to(obj_pos.dtype)
     step_dt = float(getattr(env, "step_dt", 1.0 / 30.0)) or (1.0 / 30.0)
     return placed * (bonus / step_dt)
 
