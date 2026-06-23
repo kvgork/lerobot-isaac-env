@@ -281,7 +281,7 @@ def success_termination(
 def place_termination(
     env: ManagerBasedRLEnv,
     target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
-    success_radius: float = 0.06,
+    success_radius: float = 0.05,  # cup radius; matches place_success_reward + the env knob default
     object_name: str = "source_object",
     rest_height: float = 0.05,
     lift_margin: float = 0.02,

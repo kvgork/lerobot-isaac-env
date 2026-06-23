@@ -98,24 +98,55 @@ def test_terminations_cfg_success_default_object_name():
 # need torch are skipped automatically via pytest.importorskip.
 
 
-def _make_mock_env(obj_positions):
-    """Return a minimal mock env for place_termination.
+def _make_mock_env(obj_positions, gripper_open=True, elb=0):
+    """Return a minimal mock env for place_termination / is_placed.
+
+    The 2026-06-23 real-place predicate (is_placed) needs more than the object
+    pose: it gates on a per-episode LIFT LATCH (env.episode_length_buf), a
+    RESTING check (obj_z < PLACE_REST_Z), and a RELEASED check (robot gripper
+    joint open). So the mock now also exposes a ``robot`` entity (gripper joint
+    at index 0) and ``episode_length_buf``.
 
     Parameters
     ----------
-    obj_positions:
-        List of (x, y, z) tuples, one per env.  Converted to a (N, 3) torch
-        tensor exposed as ``env.scene["source_object"].data.root_pos_w``.
+    obj_positions: list of (x, y, z) — one per env → (N,3) root_pos_w.
+    gripper_open: bool or list[bool] — gripper joint = +0.5 (open) / -0.175 (closed).
+    elb: int — episode_length_buf value for all envs (drives latch reset detection).
     """
     torch = pytest.importorskip("torch")
     from types import SimpleNamespace
 
-    pos_tensor = torch.tensor(obj_positions, dtype=torch.float32)  # (N, 3)
-    obj_data = SimpleNamespace(root_pos_w=pos_tensor)
-    obj_entity = SimpleNamespace(data=obj_data)
-    scene = {"source_object": obj_entity}
-    env = SimpleNamespace(scene=scene)
+    env = SimpleNamespace(scene={})
+    _set_state(env, obj_positions, gripper_open=gripper_open, elb=elb)
     return env
+
+
+def _set_state(env, obj_positions, gripper_open=True, elb=None):
+    """Mutate the mock env's object pose / gripper / episode_length_buf in place.
+    Used to drive the lift-then-place sequence the latch requires."""
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace
+
+    pos = torch.tensor(obj_positions, dtype=torch.float32)  # (N, 3)
+    n = pos.shape[0]
+    go = gripper_open if isinstance(gripper_open, (list, tuple)) else [gripper_open] * n
+    gj = torch.tensor([[0.5 if o else -0.175] for o in go], dtype=torch.float32)  # (N,1), col0=gripper
+    robot = SimpleNamespace(data=SimpleNamespace(joint_pos=gj), find_joints=lambda name: ([0], [name]))
+    env.scene["source_object"] = SimpleNamespace(data=SimpleNamespace(root_pos_w=pos))
+    env.scene["robot"] = robot
+    env._gripper_jidx = None  # force re-resolve (joint_pos object changed)
+    if elb is not None:
+        env.episode_length_buf = torch.full((n,), int(elb), dtype=torch.long)
+
+
+def _lift_then_place(term_mod, lifted, placed, gripper_open=True, **kw):
+    """Drive a real place: call place_termination once with the object LIFTED (sets the
+    ever-lifted latch), then again with it RESTING + released, and return the 2nd verdict.
+    `lifted` / `placed` are obj_positions lists (one per env)."""
+    env = _make_mock_env(lifted, gripper_open=False, elb=10)  # lift phase: gripper still closed
+    term_mod.place_termination(env, **kw)                     # sets env._place_ever_lifted
+    _set_state(env, placed, gripper_open=gripper_open, elb=11)  # place phase: rest + release, elb up (no reset)
+    return term_mod.place_termination(env, **kw)
 
 
 def test_place_termination_signature_has_lift_params():
@@ -159,18 +190,24 @@ def test_place_termination_require_lift_true_carried_succeeds(monkeypatch):
 
     monkeypatch.setattr(term_mod, "_ISAACLAB_AVAILABLE", True)
     monkeypatch.setattr(term_mod, "_PLACE_REQUIRE_LIFT", True)
+    monkeypatch.setattr(term_mod, "_PLACE_REQUIRE_RELEASE", True)
+    monkeypatch.setattr(term_mod, "_PLACE_REST_Z", 0.04)
 
-    # Object at target XY, z=0.10 > rest_height(0.05)+lift_margin(0.02)=0.07
-    env = _make_mock_env([(0.22, -0.13, 0.10)])
-    result = term_mod.place_termination(
-        env,
+    # Real place: LIFT (z=0.10, sets the ever-lifted latch), then REST (z=0.02<0.04) + RELEASE
+    # (gripper open) in the bin → True. A single instantaneous high-z is NOT a place under the
+    # 2026-06-23 semantics (a lifted-aloft die is not "placed").
+    result = _lift_then_place(
+        term_mod,
+        lifted=[(0.22, -0.13, 0.10)],
+        placed=[(0.22, -0.13, 0.02)],
+        gripper_open=True,
         target_pos=(0.22, -0.13, 0.01),
         success_radius=0.06,
         rest_height=0.05,
         lift_margin=0.02,
     )
     assert result.shape == (1,)
-    assert result[0].item() is True, "carried object in bin must trigger place_termination"
+    assert result[0].item() is True, "lifted-then-rested-and-released in bin must trigger place_termination"
 
 
 def test_place_termination_require_lift_false_slide_allowed(monkeypatch):
@@ -221,17 +258,18 @@ def test_place_termination_require_lift_true_batched(monkeypatch):
 
     monkeypatch.setattr(term_mod, "_ISAACLAB_AVAILABLE", True)
     monkeypatch.setattr(term_mod, "_PLACE_REQUIRE_LIFT", True)
+    monkeypatch.setattr(term_mod, "_PLACE_REQUIRE_RELEASE", True)
+    monkeypatch.setattr(term_mod, "_PLACE_REST_Z", 0.04)
 
-    # env 0: slid into bin (z low)     → False
-    # env 1: carried into bin (z high) → True
-    # env 2: lifted but outside bin    → False
-    env = _make_mock_env([
-        (0.22, -0.13, 0.03),   # slide — in bin XY, z too low
-        (0.22, -0.13, 0.10),   # carry — in bin XY, z above threshold
-        (0.50, 0.10, 0.15),    # lifted but wrong XY
-    ])
-    result = term_mod.place_termination(
-        env,
+    # Per-env over a lift→place sequence (latch + rest + release):
+    #   env 0: NEVER lifted (slide) — stays low both phases    → False
+    #   env 1: lifted then rested+released in bin               → True
+    #   env 2: lifted then rested+released but OUTSIDE bin XY   → False
+    result = _lift_then_place(
+        term_mod,
+        lifted=[(0.22, -0.13, 0.03), (0.22, -0.13, 0.10), (0.50, 0.10, 0.15)],
+        placed=[(0.22, -0.13, 0.03), (0.22, -0.13, 0.02), (0.50, 0.10, 0.02)],
+        gripper_open=True,
         target_pos=(0.22, -0.13, 0.01),
         success_radius=0.06,
         rest_height=0.05,

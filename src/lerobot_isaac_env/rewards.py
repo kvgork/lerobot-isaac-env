@@ -412,7 +412,7 @@ def grasp_closure_reward(
 def place_success_reward(
     env: ManagerBasedRLEnv,
     target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
-    success_radius: float = 0.06,
+    success_radius: float = 0.05,  # match place_termination (cup radius); was 0.06 — see is_placed
     rest_height: float = 0.05,
     lift_margin: float = 0.02,
     bonus: float = 5.0,

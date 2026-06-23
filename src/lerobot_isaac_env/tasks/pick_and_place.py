@@ -430,6 +430,10 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                                     "target_pos": _TARGET_POS,
                                     "rest_height": float(_OBJECT_POS[2]),
                                     "bonus": _PLACE_SUCCESS_BONUS,
+                                    # MUST match place_termination's radius (same env knob) — else
+                                    # the dominant place bonus pays in an annulus the termination
+                                    # doesn't end on → reward-hack (park off-centre, farm the bonus).
+                                    "success_radius": float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_RADIUS", "0.05")),
                                 },
                                 weight=_PLACE_SUCCESS_WEIGHT,
                             )
