@@ -278,14 +278,50 @@ def _make_d435_camera_cfg(
 #
 # When _GRIPPER_ACTION_SCALE == 0.5 this dict is semantically identical to
 # scale=0.5 (uniform) — no behaviour change for existing consumers.
-_ACTIONS_SCALE_DICT: dict = {
-    "shoulder_pan": 0.5,
-    "shoulder_lift": 0.5,
-    "elbow_flex": 0.5,
-    "wrist_flex": 0.5,
-    "wrist_roll": 0.5,
-    "gripper": _GRIPPER_ACTION_SCALE,
-}
+#
+# C1 action-scale fix (2026-07-15): the residual-RL ee-descent blocker was that
+# scale=0.5 forces |action|>1 for any joint that must move >0.5 rad from default
+# (the descent to grasp_z needs wrist_flex ~2.2 rad → |action|~4.4, clamped to 1
+# by the residual blend → the arm can't descend). The measure probe
+# (scripts/_gen_sim_demos.py --measure_scale → outputs/action_scale.json) records
+# per-joint max|q_des-q_default|; loading those as the per-joint scale maps the full
+# working range to [-1,1], so scripted/demo/actor actions all fit and the clamp is a
+# no-op. STRICTLY OPT-IN: only active when LEROBOT_ISAAC_ACTION_SCALE_JSON points at
+# the probe JSON — with the var unset every consumer sees the historical 0.5 uniform
+# scale, so this is a NO-OP for all existing runs/tests. The scripted-action
+# normalisers (sheeprl_plugin.isaac_env.compute_scripted_action and
+# scripts/_gen_sim_demos.step_to) MUST divide by the SAME per-joint scale — they call
+# this loader so there is one source of truth and q_cmd == q_des holds.
+_ARM_JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+
+
+def load_action_scale_dict() -> dict:
+    """Per-joint JointPositionAction scale keyed by joint name.
+
+    Arm-joint scales come from the C1 probe JSON at ``$LEROBOT_ISAAC_ACTION_SCALE_JSON``
+    (``per_joint.<name>.recommended_scale``) when that env var is set and readable;
+    otherwise every arm joint falls back to ``0.5`` (the historical uniform scale — a
+    NO-OP). The gripper always keeps ``_GRIPPER_ACTION_SCALE``.
+    """
+    import json
+    import os
+
+    scales = {n: 0.5 for n in _ARM_JOINT_NAMES}
+    path = os.environ.get("LEROBOT_ISAAC_ACTION_SCALE_JSON", "")
+    if path and os.path.exists(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            for name, rec in (data.get("per_joint") or {}).items():
+                if name in scales and isinstance(rec, dict) and rec.get("recommended_scale"):
+                    scales[name] = float(rec["recommended_scale"])
+        except Exception:  # noqa: BLE001 — a malformed probe file must not break env build
+            pass
+    scales["gripper"] = _GRIPPER_ACTION_SCALE
+    return scales
+
+
+_ACTIONS_SCALE_DICT: dict = load_action_scale_dict()
 
 
 @configclass
