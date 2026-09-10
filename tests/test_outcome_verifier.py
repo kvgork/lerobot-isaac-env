@@ -76,10 +76,10 @@ def test_object_in_bin_batched_mixed():
     """Batched (N,3) input → (N,) bool ndarray with mixed results."""
     positions = np.array(
         [
-            [0.22, -0.13, 0.008],   # in bin
-            [0.50, 0.00, 0.008],    # outside
-            [0.22, -0.13, 0.005],   # in bin (z ignored)
-            [0.00, 0.00, 0.000],    # outside
+            [0.22, -0.13, 0.008],  # in bin
+            [0.50, 0.00, 0.008],  # outside
+            [0.22, -0.13, 0.005],  # in bin (z ignored)
+            [0.00, 0.00, 0.000],  # outside
         ]
     )
     result = object_in_bin(positions, TARGET, RADIUS)
@@ -93,7 +93,7 @@ def test_object_in_bin_batched_z_min():
     """Batched with z_min gate → mixed outcomes."""
     positions = np.array(
         [
-            [0.22, -0.13, 0.02],   # in bin, z OK
+            [0.22, -0.13, 0.02],  # in bin, z OK
             [0.22, -0.13, 0.005],  # in bin, z too low
         ]
     )
@@ -134,9 +134,9 @@ def test_object_in_bin_nan_batched_per_row_false():
     """Batched pos: row with NaN → False for that row only (fail-safe)."""
     positions = np.array(
         [
-            [0.22, -0.13, 0.008],      # valid, in bin → True
+            [0.22, -0.13, 0.008],  # valid, in bin → True
             [float("nan"), -0.13, 0.008],  # NaN → False
-            [0.50, 0.00, 0.008],       # valid, outside → False
+            [0.50, 0.00, 0.008],  # valid, outside → False
         ]
     )
     result = object_in_bin(positions, TARGET, RADIUS)
@@ -149,7 +149,7 @@ def test_object_in_bin_nan_z_gated_batched():
     """Batched with z_min: row whose z is NaN → False (fail-safe)."""
     positions = np.array(
         [
-            [0.22, -0.13, 0.02],          # valid, in bin, z OK → True
+            [0.22, -0.13, 0.02],  # valid, in bin, z OK → True
             [0.22, -0.13, float("nan")],  # NaN z → False
         ]
     )
@@ -385,6 +385,9 @@ def test_predicates_registry_is_the_documented_set():
     """PREDICATES must be exactly the documented set — a canary against silent drift.
 
     Was three keys before 2026-09-10; the binary_success_verifier skill's three extra
+    predicates were merged in, and object_in_box was added later the same day after an
+    adversarial review found the box-onto-radius adapter unsound. This canary fired on
+    that addition, which is exactly its job.
     predicates were merged in on that date so sim, hardware and the agent specs share
     ONE registry. Asserting the exact set (not a count) makes both an accidental
     removal and an undocumented addition fail loudly here.
@@ -393,6 +396,7 @@ def test_predicates_registry_is_the_documented_set():
         "object_in_bin",
         "pose_within_eps",
         "gripper_closed_on_object",
+        "object_in_box",
         "object_lifted",
         "reached_target",
         "at_home_pose",
@@ -537,5 +541,88 @@ def test_merged_predicates_are_registered_and_dispatchable():
     for name in ("object_lifted", "reached_target", "at_home_pose"):
         assert name in PREDICATES
     assert verify("object_lifted", object_height=0.1, initial_height=0.0) is True
-    assert verify("reached_target", position=[0.0, 0.0, 0.0], target=[0.0, 0.0, 0.0]) is True
+    assert (
+        verify("reached_target", position=[0.0, 0.0, 0.0], target=[0.0, 0.0, 0.0])
+        is True
+    )
     assert verify("at_home_pose", joint_pos=[0.0] * 6, home_pos=[0.0] * 6) is True
+
+
+# ---------------------------------------------------------------------------
+# object_in_box — added 2026-09-10 after adversarial review
+# ---------------------------------------------------------------------------
+
+BOX_LO = [0.18, -0.17, 0.00]
+BOX_HI = [0.26, -0.09, 0.10]
+
+
+def test_object_in_box_inside_and_outside():
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    assert object_in_box([0.22, -0.13, 0.05], BOX_LO, BOX_HI) is True
+    assert object_in_box([0.90, -0.13, 0.05], BOX_LO, BOX_HI) is False
+
+
+def test_object_in_box_bounds_are_inclusive():
+    """Inclusive faces match the binary_success_verifier semantics this replaced."""
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    assert object_in_box(BOX_LO, BOX_LO, BOX_HI) is True
+    assert object_in_box(BOX_HI, BOX_LO, BOX_HI) is True
+
+
+def test_object_in_box_enforces_the_ceiling():
+    """The defect that motivated this predicate: a dropped upper-Z bound."""
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    assert object_in_box([0.22, -0.13, 0.11], BOX_LO, BOX_HI) is False
+
+
+def test_object_in_box_rejects_corners_a_circumscribed_radius_would_accept():
+    """The other defect: a circle through the box corners bulges past every face."""
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    # just outside the +x face, but well inside the box's half-diagonal
+    assert object_in_box([0.268, -0.132, 0.01], BOX_LO, BOX_HI) is False
+
+
+def test_object_in_box_batched():
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    out = object_in_box(
+        [[0.22, -0.13, 0.05], [0.90, -0.13, 0.05], [0.22, -0.13, 0.11]], BOX_LO, BOX_HI
+    )
+    assert isinstance(out, np.ndarray) and out.dtype == bool
+    assert out.tolist() == [True, False, False]
+
+
+def test_object_in_box_nonfinite_is_false_not_raise():
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    assert object_in_box([float("nan"), -0.13, 0.05], BOX_LO, BOX_HI) is False
+    assert object_in_box([float("inf"), -0.13, 0.05], BOX_LO, BOX_HI) is False
+
+
+def test_object_in_box_rejects_bad_shapes():
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    with pytest.raises(ValueError):
+        object_in_box([0.1, 0.2], BOX_LO, BOX_HI)
+    with pytest.raises(ValueError):
+        object_in_box([0.1, 0.2, 0.3], [0.0, 0.0], BOX_HI)
+
+
+def test_object_in_box_rejects_a_degenerate_box():
+    """lo > hi is a caller bug and must fail loud, not silently return False."""
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    with pytest.raises(ValueError, match="degenerate box"):
+        object_in_box([0.22, -0.13, 0.05], BOX_HI, BOX_LO)
+
+
+def test_object_in_box_does_not_mutate_inputs():
+    from lerobot_isaac_env.outcome_verifier import object_in_box
+
+    lo, hi, pos = list(BOX_LO), list(BOX_HI), [0.22, -0.13, 0.05]
+    object_in_box(pos, lo, hi)
+    assert (lo, hi, pos) == (BOX_LO, BOX_HI, [0.22, -0.13, 0.05])

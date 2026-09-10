@@ -137,9 +137,7 @@ def object_in_bin(
             )
         batched = True
     else:
-        raise ValueError(
-            f"object_pos must be shape (3,) or (N, 3), got {obj.shape}"
-        )
+        raise ValueError(f"object_pos must be shape (3,) or (N, 3), got {obj.shape}")
 
     if tgt.ndim == 0 or tgt.size < 2:
         raise ValueError(
@@ -245,14 +243,10 @@ def pose_within_eps(
         batched = False
     elif p.ndim == 2:
         if p.shape[1] != 7:
-            raise ValueError(
-                f"pose must be shape (N, 7) for a batch, got {p.shape}"
-            )
+            raise ValueError(f"pose must be shape (N, 7) for a batch, got {p.shape}")
         batched = True
     else:
-        raise ValueError(
-            f"pose must be shape (7,) or (N, 7), got {p.shape}"
-        )
+        raise ValueError(f"pose must be shape (7,) or (N, 7), got {p.shape}")
 
     if batched:
         # --- fail-safe non-finite handling (batched) ---
@@ -342,6 +336,99 @@ def gripper_closed_on_object(
         return bool(gw_scalar >= 0.0 and gw_scalar < closed_below and bool(op))
 
 
+def object_in_box(
+    object_pos: ArrayLike,
+    box_min: ArrayLike,
+    box_max: ArrayLike,
+) -> Outcome:
+    """Return True when the object lies inside an axis-aligned box, inclusive on all faces.
+
+    Added 2026-09-10 after an adversarial review found that adapting a box onto
+    :func:`object_in_bin`'s XY-radius form was wrong in three independent directions at
+    once: a circumscribed radius **accepts** the corner regions the box rejects (false
+    success), the box's upper Z bound was silently dropped (false success), and the
+    synthesised ``z_min`` reintroduced exactly the floor gate this module's own
+    :func:`object_in_bin` docstring warns against (false negative). A box is not a
+    circle; it needs its own predicate rather than a lossy projection onto one.
+
+    Use this when the acceptance region genuinely is a box (the
+    ``binary_success_verifier`` skill's ``bin_bounds`` form). Use
+    :func:`object_in_bin` when it genuinely is an XY radius about a bin centre.
+
+    Parameters
+    ----------
+    object_pos:
+        Position of the object. Shape ``(3,)`` for a single sample or ``(N, 3)`` for a
+        batch. Units: metres.
+    box_min:
+        Lower corner ``(x, y, z)``.
+    box_max:
+        Upper corner ``(x, y, z)``.
+
+    Returns
+    -------
+    bool or np.ndarray of bool
+        Single ``bool`` for a ``(3,)`` input; ``(N,)`` bool array for ``(N, 3)`` input.
+
+    Raises
+    ------
+    ValueError
+        If *object_pos* is not shape ``(3,)`` or ``(N, 3)``, if either corner is not
+        shape ``(3,)``, or if any ``box_min`` component exceeds its ``box_max``
+        counterpart (a degenerate box is a caller bug, not a verdict).
+
+    Notes
+    -----
+    **Bounds are inclusive** (``lo <= pos <= hi``), matching the semantics of the
+    ``binary_success_verifier`` skill's original implementation, so the merge does not
+    silently change verdicts at the faces.
+
+    **Fail-safe non-finite handling:** a NaN or Inf coordinate yields ``False`` (not
+    verifiably in the box) rather than raising, matching :func:`object_in_bin`.
+    """
+    obj = np.asarray(object_pos, dtype=float)
+    lo = np.asarray(box_min, dtype=float)
+    hi = np.asarray(box_max, dtype=float)
+
+    if obj.ndim == 1:
+        if obj.shape != (3,):
+            raise ValueError(
+                f"object_pos must be shape (3,) for a single sample, got {obj.shape}"
+            )
+        batched = False
+    elif obj.ndim == 2:
+        if obj.shape[1] != 3:
+            raise ValueError(
+                f"object_pos must be shape (N, 3) for a batch, got {obj.shape}"
+            )
+        batched = True
+    else:
+        raise ValueError(f"object_pos must be shape (3,) or (N, 3), got {obj.shape}")
+
+    if lo.shape != (3,) or hi.shape != (3,):
+        raise ValueError(
+            f"box_min and box_max must both be shape (3,), got {lo.shape} and {hi.shape}"
+        )
+    if np.any(lo > hi):
+        raise ValueError(
+            f"degenerate box: box_min {lo.tolist()} exceeds box_max {hi.tolist()} "
+            "on at least one axis"
+        )
+
+    if batched:
+        finite = (
+            np.isfinite(obj).all(axis=-1)
+            & np.isfinite(lo).all()
+            & np.isfinite(hi).all()
+        )
+        inside = ((obj >= lo) & (obj <= hi)).all(axis=-1)
+        return (inside & finite).astype(bool)
+
+    if not (np.isfinite(obj).all() and np.isfinite(lo).all() and np.isfinite(hi).all()):
+        return False
+    return bool(np.all((obj >= lo) & (obj <= hi)))
+
+
 def object_lifted(
     object_height: ArrayLike,
     initial_height: ArrayLike,
@@ -384,9 +471,7 @@ def object_lifted(
     init = np.asarray(initial_height, dtype=float)
 
     if cur.ndim > 1:
-        raise ValueError(
-            f"object_height must be scalar or shape (N,), got {cur.shape}"
-        )
+        raise ValueError(f"object_height must be scalar or shape (N,), got {cur.shape}")
     try:
         init_b = np.broadcast_to(init, cur.shape)
     except ValueError as exc:
@@ -429,9 +514,7 @@ def _within_tol(
     elif cur.ndim == 2:
         batched = True
     else:
-        raise ValueError(
-            f"{arg_name} must be shape (D,) or (N, D), got {cur.shape}"
-        )
+        raise ValueError(f"{arg_name} must be shape (D,) or (N, D), got {cur.shape}")
 
     if ref.ndim != 1:
         raise ValueError(f"{ref_name} must be shape (D,), got {ref.shape}")
@@ -512,7 +595,9 @@ def at_home_pose(
     in lerobot's normalised ``.pos`` units — never mixed.  The predicate is unit-agnostic
     because it only ever compares the two arguments to each other.
     """
-    return _within_tol(joint_pos, home_pos, eps, arg_name="joint_pos", ref_name="home_pos")
+    return _within_tol(
+        joint_pos, home_pos, eps, arg_name="joint_pos", ref_name="home_pos"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +611,7 @@ PREDICATES: dict[str, Callable] = {
     "pose_within_eps": pose_within_eps,
     "gripper_closed_on_object": gripper_closed_on_object,
     # merged from the binary_success_verifier skill, 2026-09-10
+    "object_in_box": object_in_box,
     "object_lifted": object_lifted,
     "reached_target": reached_target,
     "at_home_pose": at_home_pose,
@@ -573,6 +659,7 @@ __all__ = [
     "object_in_bin",
     "pose_within_eps",
     "gripper_closed_on_object",
+    "object_in_box",
     "object_lifted",
     "reached_target",
     "at_home_pose",
