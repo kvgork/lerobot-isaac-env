@@ -9,6 +9,9 @@ import numpy as np
 import pytest
 
 from lerobot_isaac_env.outcome_verifier import (
+    at_home_pose,
+    object_lifted,
+    reached_target,
     PREDICATES,
     gripper_closed_on_object,
     object_in_bin,
@@ -378,9 +381,27 @@ def test_gripper_batched_negative_width():
 # ---------------------------------------------------------------------------
 
 
-def test_predicates_registry_has_three_keys():
-    """PREDICATES must contain the three documented keys."""
-    assert set(PREDICATES) == {"object_in_bin", "pose_within_eps", "gripper_closed_on_object"}
+def test_predicates_registry_is_the_documented_set():
+    """PREDICATES must be exactly the documented set — a canary against silent drift.
+
+    Was three keys before 2026-09-10; the binary_success_verifier skill's three extra
+    predicates were merged in on that date so sim, hardware and the agent specs share
+    ONE registry. Asserting the exact set (not a count) makes both an accidental
+    removal and an undocumented addition fail loudly here.
+    """
+    assert set(PREDICATES) == {
+        "object_in_bin",
+        "pose_within_eps",
+        "gripper_closed_on_object",
+        "object_lifted",
+        "reached_target",
+        "at_home_pose",
+    }
+    # every registered name must also be exported
+    from lerobot_isaac_env import outcome_verifier as _ov
+
+    for name in PREDICATES:
+        assert name in _ov.__all__, f"{name} registered but missing from __all__"
 
 
 def test_verify_object_in_bin_matches_direct():
@@ -413,3 +434,108 @@ def test_verify_pose_within_eps():
     p = _pose(0.0, 0.0, 0.0, *Q_IDENT)
     result = verify("pose_within_eps", pose=p, target_pose=p, pos_eps=0.01)
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# Predicates merged from the binary_success_verifier skill (2026-09-10)
+# ---------------------------------------------------------------------------
+
+
+def test_object_lifted_single_true_and_false():
+    """Rise >= threshold is lifted; below it is not."""
+    assert object_lifted(0.10, 0.008, lift_threshold=0.05) is True
+    assert object_lifted(0.02, 0.008, lift_threshold=0.05) is False
+
+
+def test_object_lifted_threshold_is_inclusive():
+    """A rise exactly equal to the threshold counts as lifted (>= not >)."""
+    assert object_lifted(0.058, 0.008, lift_threshold=0.05) is True
+
+
+def test_object_lifted_default_threshold_is_5cm():
+    """Default lift_threshold matches the skill's 0.05 m."""
+    assert object_lifted(0.06, 0.0) is True
+    assert object_lifted(0.04, 0.0) is False
+
+
+def test_object_lifted_batched():
+    """Batched heights return a (N,) bool array."""
+    out = object_lifted([0.10, 0.01, 0.20], 0.008, lift_threshold=0.05)
+    assert isinstance(out, np.ndarray)
+    assert out.dtype == bool
+    assert out.tolist() == [True, False, True]
+
+
+def test_object_lifted_nonfinite_is_false_not_raise():
+    """Fail-safe: NaN/Inf height yields False rather than raising."""
+    assert object_lifted(float("nan"), 0.0) is False
+    assert object_lifted(float("inf"), 0.0) is False
+    assert object_lifted(0.5, float("nan")) is False
+
+
+def test_object_lifted_bad_shape_raises():
+    """A 2-D height array is not a valid single or batch input."""
+    with pytest.raises(ValueError):
+        object_lifted([[0.1, 0.2], [0.3, 0.4]], 0.0)
+
+
+def test_reached_target_single():
+    """Position within tol is reached; outside is not."""
+    assert reached_target([0.2, 0.1, 0.0], [0.2, 0.1, 0.05], tol=0.1) is True
+    assert reached_target([0.2, 0.1, 0.0], [0.9, 0.1, 0.0], tol=0.1) is False
+
+
+def test_reached_target_tolerance_is_inclusive():
+    """Distance exactly equal to tol counts as reached (<= not <)."""
+    assert reached_target([0.0, 0.0, 0.0], [0.1, 0.0, 0.0], tol=0.1) is True
+
+
+def test_reached_target_batched():
+    out = reached_target([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], [0.0, 0.0, 0.0], tol=0.1)
+    assert isinstance(out, np.ndarray)
+    assert out.tolist() == [True, False]
+
+
+def test_at_home_pose_six_joint_so101_configuration():
+    """at_home_pose works in JOINT space over a 6-vector, not a 7-D SE(3) pose."""
+    home = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert at_home_pose([0.0, 0.0, 0.0, 0.0, 0.0, 0.01], home, eps=0.05) is True
+    assert at_home_pose([0.0, 0.0, 0.0, 0.0, 0.0, 9.0], home, eps=0.05) is False
+
+
+def test_at_home_pose_is_dimension_agnostic():
+    """Joint count is not hardcoded to 6 — a 5-DOF arm must also work."""
+    assert at_home_pose([0.0] * 5, [0.0] * 5, eps=0.01) is True
+
+
+def test_at_home_pose_dimension_mismatch_raises():
+    """Mismatched joint counts are a caller bug and must fail loud."""
+    with pytest.raises(ValueError):
+        at_home_pose([0.0] * 6, [0.0] * 5)
+
+
+def test_at_home_pose_nonfinite_is_false():
+    """Fail-safe: a NaN joint reading is 'not verifiably home', not an exception."""
+    assert at_home_pose([0.0, 0.0, 0.0, 0.0, 0.0, float("nan")], [0.0] * 6) is False
+
+
+def test_reached_target_and_at_home_pose_share_one_implementation():
+    """Regression guard for the 2026-09-10 merge.
+
+    These were two near-identical copies in the binary_success_verifier skill. They
+    are now one core with two semantic wrappers; given identical inputs and tolerance
+    they must agree exactly, so the distance semantics cannot drift apart again.
+    """
+    a = [0.1, -0.2, 0.3, 0.4, 0.0, 0.05]
+    b = [0.1, -0.2, 0.3, 0.4, 0.0, 0.00]
+    for tol in (0.01, 0.05, 0.1, 1.0):
+        assert reached_target(a, b, tol=tol) == at_home_pose(a, b, eps=tol)
+
+
+def test_merged_predicates_are_registered_and_dispatchable():
+    """All three merged predicates must be reachable through verify()."""
+    for name in ("object_lifted", "reached_target", "at_home_pose"):
+        assert name in PREDICATES
+    assert verify("object_lifted", object_height=0.1, initial_height=0.0) is True
+    assert verify("reached_target", position=[0.0, 0.0, 0.0], target=[0.0, 0.0, 0.0]) is True
+    assert verify("at_home_pose", joint_pos=[0.0] * 6, home_pos=[0.0] * 6) is True

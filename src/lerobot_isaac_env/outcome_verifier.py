@@ -342,6 +342,179 @@ def gripper_closed_on_object(
         return bool(gw_scalar >= 0.0 and gw_scalar < closed_below and bool(op))
 
 
+def object_lifted(
+    object_height: ArrayLike,
+    initial_height: ArrayLike,
+    lift_threshold: float = 0.05,
+) -> Outcome:
+    """Return True when the object has risen at least *lift_threshold* above its start height.
+
+    Merged from the ``binary_success_verifier`` skill registry (2026-09-10) so that sim
+    and hardware share ONE definition of "lifted".  The skill's dict-state form
+    (``state["object_height"]``, ``state["initial_height"]``,
+    ``state["lift_threshold"]``) maps directly onto these parameters.
+
+    Parameters
+    ----------
+    object_height:
+        Current object height (Z), metres.  Scalar for a single sample, shape ``(N,)``
+        for a batch.
+    initial_height:
+        Object height at episode start, metres.  Scalar, or shape ``(N,)`` broadcastable
+        against *object_height*.
+    lift_threshold:
+        Minimum rise in metres.  Default 0.05 (5 cm), matching the skill's default.
+
+    Returns
+    -------
+    bool or np.ndarray of bool
+
+    Raises
+    ------
+    ValueError
+        If *object_height* has more than one dimension, or if *initial_height* cannot
+        broadcast against it.
+
+    Notes
+    -----
+    Fail-safe: a non-finite height yields ``False`` (not verifiably lifted) rather than
+    raising, matching :func:`object_in_bin`.
+    """
+    cur = np.asarray(object_height, dtype=float)
+    init = np.asarray(initial_height, dtype=float)
+
+    if cur.ndim > 1:
+        raise ValueError(
+            f"object_height must be scalar or shape (N,), got {cur.shape}"
+        )
+    try:
+        init_b = np.broadcast_to(init, cur.shape)
+    except ValueError as exc:
+        raise ValueError(
+            f"initial_height shape {init.shape} cannot broadcast to "
+            f"object_height shape {cur.shape}"
+        ) from exc
+
+    finite = np.isfinite(cur) & np.isfinite(init_b)
+    result = ((cur - init_b) >= lift_threshold) & finite
+
+    if cur.ndim == 0:
+        return bool(result)
+    return result.astype(bool)
+
+
+def _within_tol(
+    current: ArrayLike,
+    reference: ArrayLike,
+    tol: float,
+    *,
+    arg_name: str,
+    ref_name: str,
+) -> Outcome:
+    """Shared Euclidean-distance-under-tolerance core.
+
+    Backs both :func:`reached_target` (task-space position) and :func:`at_home_pose`
+    (joint-space configuration).  Those two were separate near-identical copies in the
+    ``binary_success_verifier`` skill; they are one implementation here with two
+    semantic wrappers, so the distance semantics can never drift between them.
+
+    Dimensionality is deliberately NOT fixed at 3 — ``at_home_pose`` compares a 6-joint
+    SO-101 configuration, ``reached_target`` compares a 3-D Cartesian position.
+    """
+    cur = np.asarray(current, dtype=float)
+    ref = np.asarray(reference, dtype=float)
+
+    if cur.ndim == 1:
+        batched = False
+    elif cur.ndim == 2:
+        batched = True
+    else:
+        raise ValueError(
+            f"{arg_name} must be shape (D,) or (N, D), got {cur.shape}"
+        )
+
+    if ref.ndim != 1:
+        raise ValueError(f"{ref_name} must be shape (D,), got {ref.shape}")
+    if ref.shape[0] != cur.shape[-1]:
+        raise ValueError(
+            f"{arg_name} last dim {cur.shape[-1]} does not match "
+            f"{ref_name} dim {ref.shape[0]}"
+        )
+
+    if batched:
+        finite = np.isfinite(cur).all(axis=-1) & np.isfinite(ref).all()
+        dist = np.sqrt(((cur - ref) ** 2).sum(axis=-1))
+        return ((dist <= tol) & finite).astype(bool)
+
+    if not (np.isfinite(cur).all() and np.isfinite(ref).all()):
+        return False
+    dist = float(np.sqrt(((cur - ref) ** 2).sum()))
+    return bool(dist <= tol)
+
+
+def reached_target(
+    position: ArrayLike,
+    target: ArrayLike,
+    tol: float = 0.1,
+) -> Outcome:
+    """Return True when *position* is within *tol* of *target* (task space, metres).
+
+    Merged from the ``binary_success_verifier`` skill (2026-09-10).  Position-only —
+    for a full SE(3) pose including orientation use :func:`pose_within_eps`.
+
+    Parameters
+    ----------
+    position:
+        Current position, shape ``(D,)`` or ``(N, D)``.  Normally ``D == 3``.
+    target:
+        Target position, shape ``(D,)``.
+    tol:
+        Euclidean tolerance in metres.  Default 0.1, matching the skill's default.
+
+    Returns
+    -------
+    bool or np.ndarray of bool
+    """
+    return _within_tol(position, target, tol, arg_name="position", ref_name="target")
+
+
+def at_home_pose(
+    joint_pos: ArrayLike,
+    home_pos: ArrayLike,
+    eps: float = 0.05,
+) -> Outcome:
+    """Return True when the arm is within *eps* of its home configuration.
+
+    **Joint space**, not task space: for an SO-101 both arguments are 6-vectors in the
+    canonical joint order ``(shoulder_pan, shoulder_lift, elbow_flex, wrist_flex,
+    wrist_roll, gripper)``.  This is the predicate ``physical-reset-agent`` uses to
+    confirm a between-episode home reset actually happened, rather than trusting the
+    command echo.
+
+    Merged from the ``binary_success_verifier`` skill (2026-09-10).
+
+    Parameters
+    ----------
+    joint_pos:
+        Measured joint positions, shape ``(D,)`` or ``(N, D)``.
+    home_pos:
+        Home joint positions, shape ``(D,)``.
+    eps:
+        Euclidean tolerance, in the same units as the inputs.  Default 0.05.
+
+    Returns
+    -------
+    bool or np.ndarray of bool
+
+    Notes
+    -----
+    Units are the caller's: pass both arguments in degrees, or both in radians, or both
+    in lerobot's normalised ``.pos`` units — never mixed.  The predicate is unit-agnostic
+    because it only ever compares the two arguments to each other.
+    """
+    return _within_tol(joint_pos, home_pos, eps, arg_name="joint_pos", ref_name="home_pos")
+
+
 # ---------------------------------------------------------------------------
 # Registry + dispatcher
 # ---------------------------------------------------------------------------
@@ -352,6 +525,10 @@ PREDICATES: dict[str, Callable] = {
     "object_in_bin": object_in_bin,
     "pose_within_eps": pose_within_eps,
     "gripper_closed_on_object": gripper_closed_on_object,
+    # merged from the binary_success_verifier skill, 2026-09-10
+    "object_lifted": object_lifted,
+    "reached_target": reached_target,
+    "at_home_pose": at_home_pose,
 }
 
 
@@ -396,4 +573,7 @@ __all__ = [
     "object_in_bin",
     "pose_within_eps",
     "gripper_closed_on_object",
+    "object_lifted",
+    "reached_target",
+    "at_home_pose",
 ]
