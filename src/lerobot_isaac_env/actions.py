@@ -12,7 +12,8 @@ Action convention
 -----------------
 - 6 values, one per joint in ``SO101_JOINT_NAMES`` order.
 - Units: radians (same as LeRobot recordings).
-- Scale 0.5 maps normalized [-1, 1] actions to ±0.5 rad deltas.
+- Scale can be a float (uniform) or dict[str, float] (per-joint regex).
+  Default is a per-joint dict (arm joints 0.5, gripper _GRIPPER_ACTION_SCALE).
 - ``use_default_offset=True``: action is a delta from the rest pose.
 
 References
@@ -72,7 +73,7 @@ except ImportError:
                     "Jaw",
                 ]
             )
-            scale: float = 0.5
+            scale: float | dict = 0.5
             use_default_offset: bool = True
 
 

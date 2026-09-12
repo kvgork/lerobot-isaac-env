@@ -31,24 +31,78 @@ import os
 # LEROBOT_ISAAC_PROGRESS_WEIGHT — dense reward weight. 0 disables progress
 #   shaping (sparse-only). Default 10.0 preserves prior behaviour.
 # LEROBOT_ISAAC_OBJECT_X/Y/Z — source_object spawn position. Default
-#   (0.5, 0.1, 0.05). Trial 6 of plans/2026-05-24-wm-isaac-hp-trials-1to9.md
-#   uses (0.30, 0.05, 0.05) for the "object-at-home curriculum".
+#   (0.22, 0.05, 0.05) — INSIDE the SO-101 reach envelope (max planar reach
+#   ~0.346 m, measured 2026-06-09 via scripts/_reach_probe.py). The prior
+#   default (0.5, 0.1) = 0.51 m sat 0.16 m BEYOND reach, so every pick attempt
+#   (incl. the 2026-05 baseline) plateaued at "reach as far as possible" and
+#   grasp/lift/place never fired — a task-geometry bug, not a reward bug. See
+#   plans/2026-06-09-staged-reward-tuning-results.md. Keep object+target inside
+#   r ~= 0.30 m.
 _PROGRESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PROGRESS_WEIGHT", "10.0"))
+# source_object scale factor on the DexCube (native edge ≈ 0.06 m). Default 0.267
+# → a ~16 mm die (the intended object). The old 0.05 gave a ~4 mm cube — too
+# small to grasp. Env-tunable: LEROBOT_ISAAC_OBJECT_SCALE.
+_OBJECT_SCALE = float(os.environ.get("LEROBOT_ISAAC_OBJECT_SCALE", "0.267"))
 _OBJECT_POS = (
-    float(os.environ.get("LEROBOT_ISAAC_OBJECT_X", "0.5")),
-    float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.1")),
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_X", "0.22")),
+    float(os.environ.get("LEROBOT_ISAAC_OBJECT_Y", "0.05")),
     float(os.environ.get("LEROBOT_ISAAC_OBJECT_Z", "0.05")),
 )
 # Target bin xy (place destination). Static visual marker; reward reads this
-# cfg value, not a sim rigid-body pose.
+# cfg value, not a sim rigid-body pose. Default (0.22, -0.13) = 0.256 m, inside
+# reach, laterally separated from the object for a real pick->place.
 _TARGET_POS = (
-    float(os.environ.get("LEROBOT_ISAAC_TARGET_X", "0.5")),
-    float(os.environ.get("LEROBOT_ISAAC_TARGET_Y", "-0.2")),
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_X", "0.22")),
+    float(os.environ.get("LEROBOT_ISAAC_TARGET_Y", "-0.13")),
     float(os.environ.get("LEROBOT_ISAAC_TARGET_Z", "0.01")),
 )
 # Staged reach→grasp→lift→place shaping. OFF by default (preserves current
 # progress+success behaviour). Enable + GPU-verify before relying on it.
 _STAGED_REWARD = os.environ.get("LEROBOT_ISAAC_STAGED_REWARD", "0") not in ("0", "", "false", "False")
+# Per-stage weights — env-tunable so the reward ladder can be balanced on a
+# num_envs=1 smoke without re-editing code (plan 2026-06-08 Step 1). Isaac
+# scales reward by weight*dt; tune so reach < grasp < lift < place < success.
+# Defaults preserve the original hardcoded values (grasp 2 / lift 5 / place 5).
+_GRASP_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_GRASP_WEIGHT", "2.0"))
+_LIFT_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_WEIGHT", "5.0"))
+_PLACE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_WEIGHT", "5.0"))
+# grasp_closure term — rewards CLOSING the jaw on the object (the missing grip
+# incentive; run #2 2026-06-09 reached the object but never closed → no lift).
+# closed_high: SO-101 gripper angle increases to close (limits [-0.17, 1.75]),
+# so the upper limit is "closed". Env-tunable (set =0 to flip) — lift_reward is
+# the true arbiter so a wrong sign is unhelpful, never farmable.
+_CLOSURE_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_CLOSURE_WEIGHT", "0.0"))
+_GRIPPER_CLOSED_HIGH = os.environ.get("LEROBOT_ISAAC_GRIPPER_CLOSED_HIGH", "1") not in ("0", "", "false", "False")
+# place_success — dominant dt-INVARIANT terminal bonus for object-in-bin. The
+# func cancels RewardManager's *dt internally, so net per-step reward = weight *
+# bonus. Opt-in (weight default 0). bonus 5 -> placed state ~25x a reach step.
+_PLACE_SUCCESS_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_WEIGHT", "0.0"))
+_PLACE_SUCCESS_BONUS = float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_BONUS", "5.0"))
+# lift_shaping — gradient for RAISING the gripped object (the missing lift-
+# exploration signal; grip physics is fine but lift_reward keys on object-z so
+# gives no gradient toward the lifting motion). Opt-in (weight default 0).
+_LIFT_SHAPING_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_LIFT_SHAPING_WEIGHT", "0.0"))
+# carry_shaping — gradient for moving the gripped+lifted die toward the bin (die16
+# plateaued lifting-in-place). Opt-in (weight default 0).
+_CARRY_SHAPING_WEIGHT = float(os.environ.get("LEROBOT_ISAAC_CARRY_SHAPING_WEIGHT", "0.0"))
+# place_reward Gaussian std (m) on xy-to-target. Default 0.05 only pays within
+# ~5 cm of the bin — too local to guide a CARRY from the ~0.16 m-away pickup.
+# Widen (e.g. 0.15) so the lifted object gets a gradient toward the bin from the
+# pickup point. Env-tunable.
+_PLACE_STD = float(os.environ.get("LEROBOT_ISAAC_PLACE_STD", "0.05"))
+# grasp proximity Gaussian std (m). 0.04 ≈ EE must be within ~4 cm. Widen (e.g.
+# 0.06–0.08) if the agent reaches the object but grasp never fires (run #2
+# 2026-06-09 plateaued reaching ~7 cm short). Env-tunable for contact tuning.
+_GRASP_STD = float(os.environ.get("LEROBOT_ISAAC_GRASP_STD", "0.04"))
+# GRASP-FIRST sub-curriculum stage.  "0" (default) = normal carry-place behaviour
+# (place_termination).  "1" = SUCCESS = object lifted-and-held (lift_termination),
+# so the agent learns grip+lift BEFORE carry+place is introduced.
+# Use: train with GRASP_STAGE=1 until high success rate, then switch to "0".
+_GRASP_STAGE: bool = os.environ.get("LEROBOT_ISAAC_GRASP_STAGE", "0") not in ("0", "", "false", "False")
+# Consecutive steps the object must stay lifted for lift_termination to fire SUCCESS
+# (grasp stage). Default 10. Lower (e.g. 3) makes a brief lift count — useful when the
+# agent grips+lifts but can't yet HOLD 10 steps, so the success signal is learnable.
+_LIFT_HOLD_STEPS: int = int(os.environ.get("LEROBOT_ISAAC_LIFT_HOLD_STEPS", "10"))
 
 from dataclasses import dataclass
 
@@ -177,6 +231,15 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
         except AttributeError:
             pass
 
+        # Env-var stage override (DR level): 2=none, 3=object xy±2cm,
+        # 4=object xy±5cm + lighting + friction. LEROBOT_ISAAC_STAGE.
+        _stage_env = os.environ.get("LEROBOT_ISAAC_STAGE")
+        if _stage_env:
+            try:
+                self.stage = int(_stage_env)
+            except ValueError:
+                pass
+
         # Validate stage
         if self.stage not in (2, 3, 4):
             raise ValueError(
@@ -191,17 +254,34 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
             # Spawn position is controlled by LEROBOT_ISAAC_OBJECT_X/Y/Z env vars
             # (default 0.5, 0.1, 0.05). Trial 6 uses (0.30, 0.05, 0.05).
             try:
+                # Die spawned as a PRIMITIVE cuboid -> a true PhysX BOX collider
+                # (perfectly solid, no mesh approximation). The DexCube USD's mesh
+                # collider let the gripper finger pass through the die; a box shape
+                # is reliably solid. Edge length keeps the OBJECT_SCALE semantics
+                # (DexCube native edge 0.06 m): scale 0.267 -> 16 mm die.
+                _edge = _OBJECT_SCALE * 0.06
+                # Grip firmness (2026-06-23): the scripted grasp lifts the die only ~2cm
+                # then SLIPS (closed grip at the -0.175 joint limit is loose). Raise die
+                # friction + solver iterations + tight collision offsets so the grasp HOLDS
+                # for a sustained lift. Friction env-tunable for probe sweeps.
+                _obj_friction = float(os.environ.get("LEROBOT_ISAAC_OBJECT_FRICTION", "3.0"))
                 self.scene.source_object = RigidObjectCfg(
                     prim_path="{ENV_REGEX_NS}/SourceObject",
-                    spawn=sim_utils.UsdFileCfg(
-                        usd_path=(
-                            "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
-                            "/Assets/Isaac/4.0/Isaac/Props/Blocks/DexCube/dex_cube_instanceable.usd"
+                    spawn=sim_utils.CuboidCfg(
+                        size=(_edge, _edge, _edge),
+                        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                            solver_position_iteration_count=32,
                         ),
-                        scale=(0.05, 0.05, 0.05),
+                        mass_props=sim_utils.MassPropertiesCfg(mass=0.01),
+                        collision_props=sim_utils.CollisionPropertiesCfg(
+                            collision_enabled=True, contact_offset=0.004, rest_offset=0.0,
+                        ),
+                        physics_material=sim_utils.RigidBodyMaterialCfg(
+                            static_friction=_obj_friction, dynamic_friction=_obj_friction,
+                        ),
                     ),
                     init_state=RigidObjectCfg.InitialStateCfg(
-                        pos=_OBJECT_POS,  # was (0.5, 0.1, 0.05); now env-var-driven
+                        pos=_OBJECT_POS,  # env-var-driven (LEROBOT_ISAAC_OBJECT_X/Y/Z)
                         rot=(1.0, 0.0, 0.0, 0.0),
                     ),
                 )
@@ -273,26 +353,90 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                         _src = SceneEntityCfg("source_object")
                         self.rewards.grasp = RewardTermCfg(
                             func=_rmod.grasp_reward,
-                            params={"object_cfg": _src, "ee_body_name": "gripper_link"},
-                            weight=2.0,
+                            params={
+                                "object_cfg": _src,
+                                "ee_body_name": "gripper_link",
+                                "std": _GRASP_STD,
+                            },
+                            weight=_GRASP_WEIGHT,
                         )
+                        # Closure term (opt-in via LEROBOT_ISAAC_CLOSURE_WEIGHT>0):
+                        # rewards closing the jaw ON the object so lift can fire.
+                        if _CLOSURE_WEIGHT > 0.0:
+                            self.rewards.grasp_closure = RewardTermCfg(
+                                func=_rmod.grasp_closure_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "ee_body_name": "gripper_link",
+                                    "gripper_joint_name": "gripper",
+                                    "closed_high": _GRIPPER_CLOSED_HIGH,
+                                },
+                                weight=_CLOSURE_WEIGHT,
+                            )
                         self.rewards.lift = RewardTermCfg(
                             func=_rmod.lift_reward,
                             params={
                                 "object_cfg": _src,
                                 "rest_height": float(_OBJECT_POS[2]),
                             },
-                            weight=5.0,
+                            weight=_LIFT_WEIGHT,
                         )
+                        # Lift-MOTION shaping: gradient for raising the gripped
+                        # object (opt-in via LEROBOT_ISAAC_LIFT_SHAPING_WEIGHT>0).
+                        if _LIFT_SHAPING_WEIGHT > 0.0:
+                            self.rewards.lift_shaping = RewardTermCfg(
+                                func=_rmod.lift_shaping_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "ee_body_name": "gripper_link",
+                                    "gripper_joint_name": "gripper",
+                                    "closed_high": _GRIPPER_CLOSED_HIGH,
+                                    "rest_height": float(_OBJECT_POS[2]),
+                                },
+                                weight=_LIFT_SHAPING_WEIGHT,
+                            )
                         self.rewards.place = RewardTermCfg(
                             func=_rmod.place_reward,
                             params={
                                 "object_cfg": _src,
                                 "target_pos": _TARGET_POS,
                                 "rest_height": float(_OBJECT_POS[2]),
+                                "std": _PLACE_STD,
                             },
-                            weight=5.0,
+                            weight=_PLACE_WEIGHT,
                         )
+                        # Carry shaping: move the gripped+lifted die to the bin
+                        # (opt-in via LEROBOT_ISAAC_CARRY_SHAPING_WEIGHT>0).
+                        if _CARRY_SHAPING_WEIGHT > 0.0:
+                            self.rewards.carry_shaping = RewardTermCfg(
+                                func=_rmod.carry_shaping_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "ee_body_name": "gripper_link",
+                                    "gripper_joint_name": "gripper",
+                                    "closed_high": _GRIPPER_CLOSED_HIGH,
+                                    "rest_height": float(_OBJECT_POS[2]),
+                                    "target_pos": _TARGET_POS,
+                                },
+                                weight=_CARRY_SHAPING_WEIGHT,
+                            )
+                        # Dominant dt-invariant terminal bonus for object-in-bin
+                        # (opt-in via LEROBOT_ISAAC_PLACE_SUCCESS_WEIGHT>0).
+                        if _PLACE_SUCCESS_WEIGHT > 0.0:
+                            self.rewards.place_success = RewardTermCfg(
+                                func=_rmod.place_success_reward,
+                                params={
+                                    "object_cfg": _src,
+                                    "target_pos": _TARGET_POS,
+                                    "rest_height": float(_OBJECT_POS[2]),
+                                    "bonus": _PLACE_SUCCESS_BONUS,
+                                    # MUST match place_termination's radius (same env knob) — else
+                                    # the dominant place bonus pays in an annulus the termination
+                                    # doesn't end on → reward-hack (park off-centre, farm the bonus).
+                                    "success_radius": float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_RADIUS", "0.05")),
+                                },
+                                weight=_PLACE_SUCCESS_WEIGHT,
+                            )
                 except Exception as exc:  # noqa: BLE001
                     import logging
                     logging.getLogger(__name__).warning(
@@ -324,6 +468,142 @@ class PickAndPlaceEnvCfg(SO101EnvCfg):
                 import logging
                 logging.getLogger(__name__).warning(
                     "target_bin spawn failed: %s", exc
+                )
+
+            # CUP WALLS (2026-06-23): the real place target is a ~9 cm cup with WALLS — a die
+            # released near centre is contained by the walls.  The flat marker above has no walls,
+            # so the scripted release (which ejects the die ~5 cm forward) overshoots the rim by
+            # ~0.7 cm with nothing to stop it.  Add 4 STATIC collidable walls forming a 9 cm well
+            # so the slight overshoot is caught — matching reality and making the place succeed.
+            # STATIC collider (AssetBaseCfg + collision_props), NOT a kinematic RigidObjectCfg
+            # (which hangs sim.reset per the marker comment above).  Toggle: LEROBOT_ISAAC_PLACE_CUP.
+            if os.environ.get("LEROBOT_ISAAC_PLACE_CUP", "1") not in ("0", "", "false", "False"):
+                try:
+                    _cx, _cy = float(_TARGET_POS[0]), float(_TARGET_POS[1])
+                    _inner = float(os.environ.get("LEROBOT_ISAAC_PLACE_CUP_RADIUS", "0.045"))  # 9 cm cup
+                    _wt = 0.008      # wall thickness
+                    _wh = float(os.environ.get("LEROBOT_ISAAC_PLACE_CUP_HEIGHT", "0.07"))  # ~7 cm cup (real)
+                    _wl = 2.0 * _inner + 2.0 * _wt  # wall length (corners overlap)
+                    _wall_mat = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
+                    _walls = {
+                        "CupWallXp": ((_cx + _inner + _wt / 2, _cy, _wh / 2), (_wt, _wl, _wh)),
+                        "CupWallXn": ((_cx - _inner - _wt / 2, _cy, _wh / 2), (_wt, _wl, _wh)),
+                        "CupWallYp": ((_cx, _cy + _inner + _wt / 2, _wh / 2), (_wl, _wt, _wh)),
+                        "CupWallYn": ((_cx, _cy - _inner - _wt / 2, _wh / 2), (_wl, _wt, _wh)),
+                    }
+                    for _name, (_pos, _size) in _walls.items():
+                        setattr(
+                            self.scene, _name,
+                            AssetBaseCfg(
+                                prim_path="{ENV_REGEX_NS}/" + _name,
+                                spawn=sim_utils.CuboidCfg(
+                                    size=_size,
+                                    collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                                    physics_material=_wall_mat,
+                                ),
+                                init_state=AssetBaseCfg.InitialStateCfg(
+                                    pos=_pos, rot=(1.0, 0.0, 0.0, 0.0),
+                                ),
+                            ),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning("cup walls spawn failed: %s", exc)
+
+            # SUCCESS termination — gated by LEROBOT_ISAAC_GRASP_STAGE:
+            #
+            # GRASP_STAGE=0 (default): place_termination — object XY within
+            #   success_radius of the target bin AND lifted (full carry-place).
+            #   This is the normal carry-place curriculum; behaviour UNCHANGED
+            #   from before this feature was added.
+            #
+            # GRASP_STAGE=1: lift_termination — object held above lift threshold
+            #   for hold_steps consecutive steps.  Used for the GRASP-FIRST
+            #   sub-curriculum: teach grip+lift before carry+place.  The grasp
+            #   and lift reward terms (already active when STAGED_REWARD=1)
+            #   provide the dense signal; the carry/place reward terms can stay
+            #   wired but do not gate success in this mode.
+            #
+            # The base SO101EnvCfg wires `success_termination` (EE-to-object
+            # distance) which fires on REACH — overriding below in both cases.
+            try:
+                from isaaclab.managers import TerminationTermCfg as _TermCfg  # type: ignore[import]
+                if self.terminations is not None:
+                    if _GRASP_STAGE:
+                        from lerobot_isaac_env.terminations import (
+                            lift_termination as _lift_term,
+                        )
+                        self.terminations.success = _TermCfg(
+                            func=_lift_term,
+                            params={
+                                "object_name": "source_object",
+                                "rest_height": float(_OBJECT_POS[2]),
+                                "lift_margin": 0.02,
+                                "hold_steps": _LIFT_HOLD_STEPS,
+                            },
+                        )
+                    else:
+                        from lerobot_isaac_env.terminations import (
+                            place_termination as _place_term,
+                        )
+                        self.terminations.success = _TermCfg(
+                            func=_place_term,
+                            params={
+                                "target_pos": _TARGET_POS,
+                                # success_radius default 0.05 (2026-06-23): matches the ~9 cm
+                                # cup (inner radius 0.045) now modelled with WALLS — a die
+                                # contained against a wall rests ~0.037-0.046 from centre, so
+                                # 0.04 was too tight (rejected genuine in-cup places). Spawn is
+                                # ≥0.18 m away so P(spawn-in-bin)≈0 even at 0.05. Env-tunable.
+                                # (Historic note: was 0.04, tightened from 0.06 pre-cup to kill
+                                # spawn-in-bin free successes at near-bin curriculum stages.)
+                                "success_radius": float(os.environ.get("LEROBOT_ISAAC_PLACE_SUCCESS_RADIUS", "0.05")),
+                                "object_name": "source_object",
+                            },
+                        )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "termination wiring failed: %s", exc
+                )
+
+            # Reset the DIE to its spawn pose (+ jitter) every episode. The base
+            # EventCfg only resets the ROBOT joints — the object had NO reset event,
+            # so it was never reset between episodes (it persisted wherever it ended;
+            # the ACT eval showed ep N+1 starting at ep N's final die position). That
+            # makes the task inconsistent across episodes and is a contributor to the
+            # RL plateaus. ±1.5cm xy jitter (was ±3cm) doubles as light domain
+            # randomization. Tightened together with success_radius 0.06→0.04 so the die
+            # never spawns inside the success bin at the gentle curriculum stages — the
+            # ±3cm box reached within 2.5cm of a 6cm bin at 6.6cm nominal (vet 2026-06-20).
+            # source_object is a RigidObjectCfg → resettable.
+            try:
+                from isaaclab.managers import SceneEntityCfg as _SEC  # type: ignore[import]
+                from isaaclab.managers import EventTermCfg as _EvtCfg  # type: ignore[import]
+                if getattr(self, "events", None) is not None:
+                    self.events.reset_object = _EvtCfg(
+                        func=_mdp.reset_root_state_uniform,
+                        mode="reset",
+                        params={
+                            "pose_range": {"x": (-0.015, 0.015), "y": (-0.015, 0.015)},
+                            "velocity_range": {},
+                            "asset_cfg": _SEC("source_object"),
+                        },
+                    )
+                    # ALSO reset the ROBOT to its rest pose each episode. _events_for_stage
+                    # returns the scaffold SO101EventsCfg (0 real events), so WITHOUT this
+                    # the robot ALSO never reset between episodes (EventManager had 0 terms;
+                    # the ACT trace showed the arm persisting from the prior episode's end).
+                    # A non-resetting scene makes the task non-episodic → breaks RL.
+                    self.events.reset_robot_joints = _EvtCfg(
+                        func=_mdp.reset_joints_by_scale,
+                        mode="reset",
+                        params={"position_range": (-0.1, 0.1), "velocity_range": (0.0, 0.0)},
+                    )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "object reset event wiring failed: %s", exc
                 )
 
 

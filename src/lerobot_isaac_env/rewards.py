@@ -356,3 +356,205 @@ def place_reward(
     xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)  # (N,)
     lifted_gate = (obj_pos[:, 2] > (rest_height + margin)).to(obj_pos.dtype)
     return lifted_gate * torch.exp(-torch.square(xy_dist) / (2 * std**2))
+
+
+def grasp_closure_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+    gripper_joint_name: str = "gripper",
+    proximity_std: float = 0.06,
+    closed_high: bool = True,
+) -> torch.Tensor:
+    """Reward CLOSING the gripper on the object — the missing "grip" incentive.
+
+    The proximity-only ``grasp_reward`` rewards reaching the object but never
+    closing the jaw, so the cube is never gripped and ``lift_reward`` can't fire
+    (run #2, 2026-06-09, plateaued reaching ~7 cm short with the jaw open). This
+    term = ``proximity_gate * closedness``:
+
+    - ``proximity_gate`` = ``exp(-dist² / 2·proximity_std²)`` (EE near object).
+      Slightly wider ``proximity_std`` (0.06) than ``grasp_reward`` so closing is
+      encouraged as the arm arrives, not only at exact contact.
+    - ``closedness`` = the gripper joint position normalised by its own limits to
+      ``[0, 1]``; ``closed_high`` selects which limit is "closed" (the SO-101
+      convention is resolved empirically — see scripts/_gripper_probe.py).
+
+    Only pays when BOTH near AND closing, so it can't be farmed by snapping the
+    jaw shut in free space. Composes with ``lift_reward`` (the true pick signal).
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    robot = env.scene[robot_cfg.name]
+
+    _, _, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    prox = torch.exp(-torch.square(dist) / (2 * proximity_std**2))  # (N,) in [0,1]
+
+    try:
+        jaw_ids, _ = robot.find_joints(gripper_joint_name)
+        jaw_idx = int(jaw_ids[0]) if len(jaw_ids) else -1
+    except Exception:  # noqa: BLE001
+        jaw_idx = -1
+    jaw = robot.data.joint_pos[:, jaw_idx]  # (N,)
+    limits = robot.data.joint_pos_limits[:, jaw_idx, :]  # (N, 2) lower, upper
+    span = (limits[:, 1] - limits[:, 0]).clamp_min(1e-6)
+    norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)  # 0 at lower, 1 at upper
+    closedness = norm if closed_high else (1.0 - norm)
+    return prox * closedness
+
+
+def place_success_reward(
+    env: ManagerBasedRLEnv,
+    target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
+    success_radius: float = 0.05,  # match place_termination (cup radius); was 0.06 — see is_placed
+    rest_height: float = 0.05,
+    lift_margin: float = 0.02,
+    bonus: float = 5.0,
+    object_cfg: Any = None,
+) -> torch.Tensor:
+    """Dominant, dt-INVARIANT terminal bonus for placing the object in the bin.
+
+    The plan's success criterion is "object placed in the target bin", but the
+    wired ``success_bonus`` (``success_reward``) is only a proximity Gaussian and
+    Isaac's RewardManager multiplies every term by ``dt`` (≈1/30), so a normal
+    weight gives a negligible bonus. This term cancels that ``dt`` (``/step_dt``)
+    so the returned magnitude is the per-step reward the env actually sees:
+    ``RewardManager`` computes ``func * weight * dt`` → ``(bonus/dt) * weight * dt
+    = bonus * weight``. With ``weight=1`` the placed state is worth ``bonus`` per
+    step (≈25× a reach step at bonus=5), making success dominate the ladder.
+
+    "Placed" = object xy within ``success_radius`` of the target AND object was
+    raised above ``rest_height + lift_margin`` at least to the bin lip (so it was
+    carried, not slid). Pays every step the object stays placed (a strong attractor
+    to keep it in the bin).
+
+    Returns ``(num_envs,)`` — ``bonus/step_dt`` where placed, else 0.
+    """
+    _require_isaaclab()
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    obj = env.scene[object_cfg.name]
+    obj_pos = obj.data.root_pos_w  # (N, 3)
+    # REAL-PLACE predicate (2026-06-23): in-bin XY AND lifted-latch AND resting-low AND
+    # gripper-released — identical to place_termination via the shared is_placed(). The old
+    # instantaneous (at_target & obj_z>thr) fired only while the die was carried aloft over the
+    # bin, so this +50 bonus nearly never paid and never rewarded an actual lower-and-release.
+    from lerobot_isaac_env.terminations import is_placed
+
+    placed = is_placed(env, obj_pos, target_pos, success_radius, rest_height, lift_margin).to(obj_pos.dtype)
+    step_dt = float(getattr(env, "step_dt", 1.0 / 30.0)) or (1.0 / 30.0)
+    return placed * (bonus / step_dt)
+
+
+def lift_shaping_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+    gripper_joint_name: str = "gripper",
+    proximity_std: float = 0.06,
+    closed_high: bool = True,
+    rest_height: float = 0.05,
+    height_scale: float = 0.15,
+) -> torch.Tensor:
+    """Gradient for RAISING the gripper while it grips the object — the missing
+    lift-exploration signal.
+
+    Grip physics is fine (the gripper holds the cube — verified
+    scripts/_grip_physics_probe.py), but the agent plateaus at reach→close→stay-low:
+    ``lift_reward`` keys on the OBJECT's height, so it pays nothing until the object
+    is already up, giving no gradient toward the lifting MOTION. This term rewards
+    ``grip * ee_height`` — being near + closed (a grip) AND raising the
+    end-effector — so the actor is pulled to lift the gripped object, which then
+    triggers ``lift_reward`` proper.
+
+    ``grip`` = proximity_gate × jaw_closedness (∈[0,1]); ``ee_height`` =
+    clamp((ee_z − rest_height)/height_scale, 0, 1). Can't be farmed by lifting an
+    empty gripper — the proximity gate requires the object to be right there, and
+    since grip works, "near + closed + raised" means the object comes up too.
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    robot = env.scene[robot_cfg.name]
+
+    ee_pos, _, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    prox = torch.exp(-torch.square(dist) / (2 * proximity_std**2))
+
+    try:
+        jaw_ids, _ = robot.find_joints(gripper_joint_name)
+        jaw_idx = int(jaw_ids[0]) if len(jaw_ids) else -1
+    except Exception:  # noqa: BLE001
+        jaw_idx = -1
+    jaw = robot.data.joint_pos[:, jaw_idx]
+    limits = robot.data.joint_pos_limits[:, jaw_idx, :]
+    span = (limits[:, 1] - limits[:, 0]).clamp_min(1e-6)
+    norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)
+    closedness = norm if closed_high else (1.0 - norm)
+
+    grip = prox * closedness  # (N,) ~1 when gripping the object
+    ee_height = ((ee_pos[:, 2] - rest_height) / height_scale).clamp(0.0, 1.0)
+    return grip * ee_height
+
+
+def carry_shaping_reward(
+    env: ManagerBasedRLEnv,
+    target_pos: tuple[float, float, float] = (0.22, -0.13, 0.01),
+    robot_cfg: Any = None,
+    object_cfg: Any = None,
+    ee_body_name: str = "gripper_link",
+    gripper_joint_name: str = "gripper",
+    proximity_std: float = 0.06,
+    closed_high: bool = True,
+    rest_height: float = 0.05,
+    lift_margin: float = 0.02,
+    approach_std: float = 0.15,
+) -> torch.Tensor:
+    """Gradient for CARRYING the gripped+lifted object toward the bin.
+
+    die16 plateaued at −7.5: with a graspable 16 mm die the agent grasps + lifts but
+    then HOLDS the die up in place (maximising lift_shaping) instead of carrying it.
+    This term continues the gradient past lifting: ``grip × lifted × approach``, where
+    ``approach = exp(-xy_dist²/2·approach_std²)`` pulls the object's xy toward the
+    target from the pickup (wide std). Gated on STILL gripping + lifted, so it rewards
+    transporting the held die, not dropping it. Composes with place_reward/place_success.
+
+    Returns ``(num_envs,)`` in ``[0, 1]``.
+    """
+    _require_isaaclab()
+    if robot_cfg is None:
+        robot_cfg = SceneEntityCfg("robot")
+    if object_cfg is None:
+        object_cfg = SceneEntityCfg("source_object")
+    robot = env.scene[robot_cfg.name]
+    obj = env.scene[object_cfg.name]
+
+    _, obj_pos, dist = _ee_object_distance(env, robot_cfg, object_cfg, ee_body_name)
+    prox = torch.exp(-torch.square(dist) / (2 * proximity_std**2))
+    try:
+        jaw_ids, _ = robot.find_joints(gripper_joint_name)
+        jaw_idx = int(jaw_ids[0]) if len(jaw_ids) else -1
+    except Exception:  # noqa: BLE001
+        jaw_idx = -1
+    jaw = robot.data.joint_pos[:, jaw_idx]
+    limits = robot.data.joint_pos_limits[:, jaw_idx, :]
+    span = (limits[:, 1] - limits[:, 0]).clamp_min(1e-6)
+    norm = ((jaw - limits[:, 0]) / span).clamp(0.0, 1.0)
+    closedness = norm if closed_high else (1.0 - norm)
+    grip = prox * closedness
+
+    lifted = (obj_pos[:, 2] > (rest_height + lift_margin)).to(obj_pos.dtype)
+    tgt = torch.tensor(target_pos, device=obj_pos.device, dtype=obj_pos.dtype)
+    xy_dist = torch.norm(obj_pos[:, :2] - tgt[:2], dim=-1)
+    approach = torch.exp(-torch.square(xy_dist) / (2 * approach_std**2))
+    return grip * lifted * approach

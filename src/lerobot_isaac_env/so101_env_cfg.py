@@ -124,6 +124,25 @@ _INCLUDE_OBJECT_POSE = os.environ.get("LEROBOT_ISAAC_INCLUDE_OBJECT_POSE", "0") 
     "False",
 )
 
+# ---------------------------------------------------------------------------
+# Gripper action scale knob.
+# Set LEROBOT_ISAAC_GRIPPER_ACTION_SCALE=<float> to give the gripper joint its
+# own (typically larger) scale so a firm grip is reachable at moderate actions,
+# not only at the ±1.0 extreme.
+#
+# Default 0.5 = exactly the current uniform-scale behaviour so all existing
+# checkpoints and runs are unaffected when the variable is unset.
+#
+# Example (larger gripper scale for carry-place RL):
+#   LEROBOT_ISAAC_GRIPPER_ACTION_SCALE=3.0
+#
+# Action ordering NEVER changes: gripper remains the 6th dimension (index 5),
+# matching the LeRobot demos and ckpt_10000 convention.
+# ---------------------------------------------------------------------------
+_GRIPPER_ACTION_SCALE: float = float(
+    os.environ.get("LEROBOT_ISAAC_GRIPPER_ACTION_SCALE", "0.5")
+)
+
 try:
     from .observations import object_pose as _object_pose_fn  # type: ignore[import]
 except ImportError:
@@ -245,13 +264,81 @@ def _make_d435_camera_cfg(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Per-joint scale dict — arm joints always 0.5; gripper uses
+# _GRIPPER_ACTION_SCALE (default 0.5 = unchanged behaviour).
+#
+# WHY a dict instead of a single float:
+#   Isaac Lab JointPositionActionCfg accepts scale: float | dict[str, float]
+#   (isaaclab/envs/mdp/actions/actions_cfg.py).  When a dict is passed, each
+#   key is treated as a full regex matched via re.fullmatch against the joint
+#   names.  IMPORTANT: each joint may match ONLY ONE key (strict=True), so
+#   overlapping patterns like {"gripper": X, ".*": 0.5} raise ValueError.
+#   We use explicit per-joint names to guarantee a one-to-one match.
+#
+# When _GRIPPER_ACTION_SCALE == 0.5 this dict is semantically identical to
+# scale=0.5 (uniform) — no behaviour change for existing consumers.
+#
+# C1 action-scale fix (2026-07-15): the residual-RL ee-descent blocker was that
+# scale=0.5 forces |action|>1 for any joint that must move >0.5 rad from default
+# (the descent to grasp_z needs wrist_flex ~2.2 rad → |action|~4.4, clamped to 1
+# by the residual blend → the arm can't descend). The measure probe
+# (scripts/_gen_sim_demos.py --measure_scale → outputs/action_scale.json) records
+# per-joint max|q_des-q_default|; loading those as the per-joint scale maps the full
+# working range to [-1,1], so scripted/demo/actor actions all fit and the clamp is a
+# no-op. STRICTLY OPT-IN: only active when LEROBOT_ISAAC_ACTION_SCALE_JSON points at
+# the probe JSON — with the var unset every consumer sees the historical 0.5 uniform
+# scale, so this is a NO-OP for all existing runs/tests. The scripted-action
+# normalisers (sheeprl_plugin.isaac_env.compute_scripted_action and
+# scripts/_gen_sim_demos.step_to) MUST divide by the SAME per-joint scale — they call
+# this loader so there is one source of truth and q_cmd == q_des holds.
+_ARM_JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+
+
+def load_action_scale_dict() -> dict:
+    """Per-joint JointPositionAction scale keyed by joint name.
+
+    Arm-joint scales come from the C1 probe JSON at ``$LEROBOT_ISAAC_ACTION_SCALE_JSON``
+    (``per_joint.<name>.recommended_scale``) when that env var is set and readable;
+    otherwise every arm joint falls back to ``0.5`` (the historical uniform scale — a
+    NO-OP). The gripper always keeps ``_GRIPPER_ACTION_SCALE``.
+    """
+    import json
+    import os
+
+    scales = {n: 0.5 for n in _ARM_JOINT_NAMES}
+    path = os.environ.get("LEROBOT_ISAAC_ACTION_SCALE_JSON", "")
+    if path and os.path.exists(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            for name, rec in (data.get("per_joint") or {}).items():
+                if name in scales and isinstance(rec, dict) and rec.get("recommended_scale"):
+                    scales[name] = float(rec["recommended_scale"])
+        except Exception:  # noqa: BLE001 — a malformed probe file must not break env build
+            pass
+    scales["gripper"] = _GRIPPER_ACTION_SCALE
+    return scales
+
+
+_ACTIONS_SCALE_DICT: dict = load_action_scale_dict()
+
+
 @configclass
 @dataclass
 class ActionsCfg:
     """Action manager configuration for the SO-101 environment.
 
-    Uses joint position targets for all 6 joints.  Scale of 0.5 maps
-    normalized [-1, 1] actions to ±0.5 rad deltas.
+    Uses joint position targets for all 6 joints.  Arm joints (indices 0-4)
+    use scale=0.5 (±0.5 rad delta); the gripper joint (index 5) uses
+    LEROBOT_ISAAC_GRIPPER_ACTION_SCALE (default 0.5, identical to the
+    previous uniform scale).
+
+    Set LEROBOT_ISAAC_GRIPPER_ACTION_SCALE=3.0 to make a firm grip reachable
+    at ~action 0.17 instead of only at the ±1.0 extreme.
+
+    Action ordering: gripper is ALWAYS index 5, matching LeRobot demos and
+    existing checkpoints.  Changing the gripper scale does NOT shift indices.
     """
 
     joint_position: Any = field(
@@ -259,7 +346,7 @@ class ActionsCfg:
             mdp.JointPositionActionCfg(
                 asset_name="robot",
                 joint_names=[".*"],
-                scale=0.5,
+                scale=_ACTIONS_SCALE_DICT,
                 use_default_offset=True,
             )
             if _ISAACLAB_AVAILABLE and mdp is not None
